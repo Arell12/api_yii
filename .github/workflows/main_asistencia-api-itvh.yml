@@ -151,16 +151,17 @@ jobs:
       - name: Create .htaccess
         run: |
           if [ ! -f "web/.htaccess" ]; then
-            cat << EOF > web/.htaccess
-            RewriteEngine on
-            
-            # Si el directorio o archivo no existe, continuar con la siguiente regla
-            RewriteCond %{REQUEST_FILENAME} !-f
-            RewriteCond %{REQUEST_FILENAME} !-d
-            
-            # En caso contrario, redireccionar a index.php
-            RewriteRule . index.php
-            EOF
+            mkdir -p web
+            cat > web/.htaccess << 'EOFMARKER'
+RewriteEngine on
+
+# Si el directorio o archivo no existe, continuar con la siguiente regla
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+
+# En caso contrario, redireccionar a index.php
+RewriteRule . index.php
+EOFMARKER
             echo "Created .htaccess file for Apache"
           fi
 
