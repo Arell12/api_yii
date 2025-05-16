@@ -151,16 +151,15 @@ jobs:
         run: |
           if [ ! -f "web/.htaccess" ]; then
             mkdir -p web
-            cat > web/.htaccess << 'EOFMARKER'
-            RewriteEngine on
+            echo 'RewriteEngine on' > web/.htaccess
+            echo '' >> web/.htaccess
+            echo '# Si el directorio o archivo no existe, continuar con la siguiente regla' >> web/.htaccess
+            echo 'RewriteCond %{REQUEST_FILENAME} !-f' >> web/.htaccess
+            echo 'RewriteCond %{REQUEST_FILENAME} !-d' >> web/.htaccess
+            echo '' >> web/.htaccess
+            echo '# En caso contrario, redireccionar a index.php' >> web/.htaccess
+            echo 'RewriteRule . index.php' >> web/.htaccess
             
-            # Si el directorio o archivo no existe, continuar con la siguiente regla
-            RewriteCond %{REQUEST_FILENAME} !-f
-            RewriteCond %{REQUEST_FILENAME} !-d
-            
-            # En caso contrario, redireccionar a index.php
-            RewriteRule . index.php
-            EOFMARKER
             echo "Created .htaccess file for Apache"
           fi
 
