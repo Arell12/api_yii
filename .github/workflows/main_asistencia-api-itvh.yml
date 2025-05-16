@@ -41,14 +41,32 @@ jobs:
               $composer["require"]["yiisoft/yii2-debug"] = $debug_version;
               unset($composer["require-dev"]["yiisoft/yii2-debug"]);
               file_put_contents("composer.json", json_encode($composer, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+              echo "Moved yiisoft/yii2-debug from require-dev to require\n";
+            } else {
+              echo "yiisoft/yii2-debug not found in require-dev, checking if it exists in require\n";
+              if (!isset($composer["require"]["yiisoft/yii2-debug"])) {
+                $composer["require"]["yiisoft/yii2-debug"] = "~2.1.0";
+                file_put_contents("composer.json", json_encode($composer, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+                echo "Added yiisoft/yii2-debug to require\n";
+              }
             }
           '
+          cat composer.json
+
+      - name: Validate composer.json and remove composer.lock
+        if: steps.check_files.outputs.exists == 'true'
+        run: |
+          composer validate --no-check-publish
+          # Si hay problemas con el lock file, es mejor regenerarlo
+          if [ -f "composer.lock" ]; then
+            rm composer.lock
+            echo "Removed composer.lock to ensure clean installation"
+          fi
 
       - name: Run composer install
         if: steps.check_files.outputs.exists == 'true'
         run: |
-          composer validate --no-check-publish
-          composer install --prefer-dist --no-progress --optimize-autoloader  # Quitamos --no-dev para instalar debug y gii
+          composer install --prefer-dist --no-progress --optimize-autoloader --no-dev
 
       - name: Generate Yii2 cookie validation key
         run: |
@@ -56,31 +74,46 @@ jobs:
             php -r "
               \$config = file_get_contents('config/web.php');
               if (strpos(\$config, \"'cookieValidationKey' => ''\") !== false) {
-                \$config = str_replace(\"'cookieValidationKey' => ''\", \"'cookieValidationKey' => '\".bin2hex(random_bytes(32)).\"'\", \$config);
+                \$key = bin2hex(random_bytes(32));
+                \$config = str_replace(\"'cookieValidationKey' => ''\", \"'cookieValidationKey' => '\$key'\", \$config);
                 file_put_contents('config/web.php', \$config);
+                echo \"Generated cookie validation key: \$key\n\";
+              } else {
+                echo \"Cookie validation key already exists\n\";
               }
             "
           fi
 
-      - name: Ensure YII_ENV is set to 'prod' and check bootstrap configuration
+      - name: Set production environment
         run: |
-          # Primero, asegurémonos que el entorno es de producción
-          echo "<?php 
-          defined('YII_DEBUG') or define('YII_DEBUG', false);
-          defined('YII_ENV') or define('YII_ENV', 'prod');
-          " > web/index.php.new
-          
           if [ -f "web/index.php" ]; then
+            echo "<?php 
+            defined('YII_DEBUG') or define('YII_DEBUG', false);
+            defined('YII_ENV') or define('YII_ENV', 'prod');
+            " > web/index.php.new
+            
             cat web/index.php | grep -v "YII_DEBUG\|YII_ENV" >> web/index.php.new
             mv web/index.php.new web/index.php
+            echo "Set YII_ENV to 'prod' and YII_DEBUG to false"
           fi
-          
-          # Verificar que debug y gii no estén en el bootstrap
+
+      - name: Configure production modules
+        run: |
           if [ -f "config/web.php" ]; then
             php -r "
               \$config = file_get_contents('config/web.php');
-              \$config = preg_replace(\"/'bootstrap' => \['log', 'debug', 'gii'\]/\", \"'bootstrap' => ['log']\", \$config);
+              
+              // Asegurar que el bootstrap sea solo 'log'
+              \$config = preg_replace(\"/'bootstrap' => \[[^\]]*\]/\", \"'bootstrap' => ['log']\", \$config);
+              
+              // Eliminar los módulos debug y gii si existen
+              if (strpos(\$config, \"'modules' => [\") !== false) {
+                \$config = preg_replace(\"/('debug' => \[([^]]*)\],?)/s\", \"\", \$config);
+                \$config = preg_replace(\"/('gii' => \[([^]]*)\],?)/s\", \"\", \$config);
+              }
+              
               file_put_contents('config/web.php', \$config);
+              echo \"Removed debug and gii modules from configuration\n\";
             "
           fi
 
@@ -103,19 +136,39 @@ jobs:
                   fastcgi_index index.php;
                   include fastcgi_params;
                   fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
+                  fastcgi_param PATH_INFO \$fastcgi_path_info;
+                  fastcgi_split_path_info ^(.+\.php)(/.+)$;
               }
 
-              location ~ /\.ht {
+              location ~ /\.(ht|svn|git) {
                   deny all;
               }
           }
           EOF
 
+      - name: Create .htaccess
+        run: |
+          if [ ! -f "web/.htaccess" ]; then
+            cat << EOF > web/.htaccess
+            RewriteEngine on
+            
+            # Si el directorio o archivo no existe, continuar con la siguiente regla
+            RewriteCond %{REQUEST_FILENAME} !-f
+            RewriteCond %{REQUEST_FILENAME} !-d
+            
+            # En caso contrario, redireccionar a index.php
+            RewriteRule . index.php
+            EOF
+            echo "Created .htaccess file for Apache"
+          fi
+
       - name: Set permissions
         run: |
           mkdir -p runtime web/assets
           chmod -R 777 runtime web/assets
-          chmod 755 yii
+          if [ -f "yii" ]; then
+            chmod 755 yii
+          fi
 
       - name: Zip artifact for deployment
         run: zip -r release.zip . .nginx/conf.d/default.conf
