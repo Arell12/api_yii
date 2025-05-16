@@ -42,14 +42,35 @@ jobs:
       - name: Generate Yii2 cookie validation key
         run: |
           if [ -f "config/web.php" ]; then
-            php -r "file_put_contents('config/web.php', str_replace('cookieValidationKey' => '', 'cookieValidationKey' => ''.bin2hex(random_bytes(32)).'', file_get_contents('config/web.php')));"
+            # Approach 1: Display the file for debugging
+            cat config/web.php
+            
+            # Approach 2: Use a more robust approach for cookie key generation
+            php -r "
+              \$config = file_get_contents('config/web.php');
+              if (strpos(\$config, \"'cookieValidationKey' => ''\") !== false) {
+                \$config = str_replace(\"'cookieValidationKey' => ''\", \"'cookieValidationKey' => '\".bin2hex(random_bytes(32)).\"'\", \$config);
+                file_put_contents('config/web.php', \$config);
+                echo \"Cookie validation key generated successfully.\n\";
+              } else if (strpos(\$config, '\"cookieValidationKey\" => \"\"') !== false) {
+                \$config = str_replace('\"cookieValidationKey\" => \"\"', '\"cookieValidationKey\" => \"'.bin2hex(random_bytes(32)).'\"', \$config);
+                file_put_contents('config/web.php', \$config);
+                echo \"Cookie validation key generated successfully.\n\";
+              } else {
+                echo \"Cookie validation key seems to be already set or uses a different format.\n\";
+              }
+            "
+          else
+            echo "config/web.php file not found"
           fi
           
       - name: Set proper permissions for runtime directories
         run: |
           mkdir -p runtime web/assets
           chmod -R 777 runtime web/assets
-          chmod 755 yii
+          if [ -f "yii" ]; then
+            chmod 755 yii
+          fi
 
       - name: Create web.config for URL rewriting
         run: |
