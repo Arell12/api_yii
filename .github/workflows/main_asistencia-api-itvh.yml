@@ -99,7 +99,7 @@ jobs:
               }
 
               location ~ \.php$ {
-                  fastcgi_pass 127.0.0.1:8181; 
+                  fastcgi_pass 127.0.0.1:9000;
                   fastcgi_index index.php;
                   include fastcgi_params;
                   fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
@@ -131,13 +131,6 @@ jobs:
             echo "ERROR: No se pudieron crear los directorios de almacenamiento."
           fi
 
-          # Configurar PHP-FPM para escuchar en el puerto 8181
-          echo "Configurando PHP-FPM para escuchar en el puerto 8181..."
-          mkdir -p /usr/local/etc/php-fpm.d
-          echo "[www]" > /usr/local/etc/php-fpm.d/z-custom.conf
-          echo "listen = 127.0.0.1:8181" >> /usr/local/etc/php-fpm.d/z-custom.conf
-          echo "Configuración de PHP-FPM actualizada."
-
           # Aplicar configuración de Nginx si existe
           if [ -f /home/site/wwwroot/.nginx/conf.d/default.conf ]; then
             echo "Aplicando configuración de Nginx..."
@@ -158,7 +151,7 @@ jobs:
 
           # Iniciar PHP-FPM
           echo "Iniciando PHP-FPM..."
-          php-fpm --nodaemonize --fpm-config /usr/local/etc/php-fpm.conf
+          php-fpm
           EOF
           chmod +x startup.sh
 
@@ -209,7 +202,7 @@ jobs:
             # Configurar el comando de inicio en Azure
             az webapp config set --name asistencia-api-itvh --resource-group $RESOURCE_GROUP --startup-file /home/site/wwwroot/startup.sh
 
-      
+            
       - name: Deploy to Azure Web App
         uses: azure/webapps-deploy@v3
         id: deploy-to-webapp
