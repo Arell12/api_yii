@@ -37,6 +37,12 @@ $config = [
             'class' => 'yii\caching\FileCache',
         ],
 
+        // Añade la configuración del assetManager aquí
+        'assetManager' => [
+            'basePath' => isset($GLOBALS['yii2AzureStorage']) ? $GLOBALS['yii2AzureStorage']['assetsPath'] : '@webroot/assets',
+            'baseUrl' => '@web/assets',
+        ],
+
         'user' => [
             'class' => 'webvimark\modules\UserManagement\components\UserConfig',
             'on afterLogin' => function ($event) {
@@ -337,16 +343,16 @@ $config = [
     'params' => $params,
 ];
 
-    //if (defined('YII_ENV') && YII_ENV !== 'prod') {
-      //  $config['bootstrap'][] = 'debug';
-       // $config['modules']['debug'] = [
-         //   'class' => 'yii\debug\Module',
-        //];
+//if (defined('YII_ENV') && YII_ENV !== 'prod') {
+//  $config['bootstrap'][] = 'debug';
+// $config['modules']['debug'] = [
+//   'class' => 'yii\debug\Module',
+//];
 
-        //$config['bootstrap'][] = 'gii';
-        //$config['modules']['gii'] = [
-          //  'class' => 'yii\gii\Module',
-        //];
-    //}
+//$config['bootstrap'][] = 'gii';
+//$config['modules']['gii'] = [
+//  'class' => 'yii\gii\Module',
+//];
+//}
 
 return $config;
