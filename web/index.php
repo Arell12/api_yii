@@ -22,6 +22,12 @@ if (isset($GLOBALS['yii2AzureStorage'])) {
     // Agregar las rutas de almacenamiento a los alias
     $config['aliases']['@runtime'] = $GLOBALS['yii2AzureStorage']['runtimePath'];
     $config['aliases']['@webroot/assets'] = $GLOBALS['yii2AzureStorage']['assetsPath'];
+
+     // Además, configurar los alias en Yii globalmente:
+    Yii::setAlias('@runtime', $GLOBALS['yii2AzureStorage']['runtimePath']);
+    Yii::setAlias('@webroot/assets', $GLOBALS['yii2AzureStorage']['assetsPath']);
 }
+
+
 
 (new yii\web\Application($config))->run();

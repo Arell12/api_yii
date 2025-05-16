@@ -35,6 +35,7 @@ $config = [
 
         'cache' => [
             'class' => 'yii\caching\FileCache',
+            'cachePath' => '/home/site/wwwroot/runtime/cache',
         ],
 
         // Añade la configuración del assetManager aquí
@@ -64,6 +65,7 @@ $config = [
             'targets' => [
                 [
                     'class' => 'yii\log\FileTarget',
+                    'logFile' => '/home/site/wwwroot/runtime/logs/app.log',
                     'levels' => ['error', 'warning'],
                 ],
             ],
