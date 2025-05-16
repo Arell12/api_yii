@@ -1,5 +1,4 @@
 name: Build and deploy PHP app to Azure Web App - asistencia-api-itvh
-//
 on:
   push:
     branches:
@@ -153,15 +152,15 @@ jobs:
           if [ ! -f "web/.htaccess" ]; then
             mkdir -p web
             cat > web/.htaccess << 'EOFMARKER'
-RewriteEngine on
-
-# Si el directorio o archivo no existe, continuar con la siguiente regla
-RewriteCond %{REQUEST_FILENAME} !-f
-RewriteCond %{REQUEST_FILENAME} !-d
-
-# En caso contrario, redireccionar a index.php
-RewriteRule . index.php
-EOFMARKER
+            RewriteEngine on
+            
+            # Si el directorio o archivo no existe, continuar con la siguiente regla
+            RewriteCond %{REQUEST_FILENAME} !-f
+            RewriteCond %{REQUEST_FILENAME} !-d
+            
+            # En caso contrario, redireccionar a index.php
+            RewriteRule . index.php
+            EOFMARKER
             echo "Created .htaccess file for Apache"
           fi
 
