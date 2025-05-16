@@ -30,43 +30,45 @@ jobs:
             echo "exists=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Update composer.json to include debug module in main requirements
+      - name: Fix Composer dependencies and lock file
         if: steps.check_files.outputs.exists == 'true'
         run: |
-          # Mover yii2-debug de require-dev a require
-          php -r '
-            $composer = json_decode(file_get_contents("composer.json"), true);
-            if (isset($composer["require-dev"]["yiisoft/yii2-debug"])) {
-              $debug_version = $composer["require-dev"]["yiisoft/yii2-debug"];
-              $composer["require"]["yiisoft/yii2-debug"] = $debug_version;
-              unset($composer["require-dev"]["yiisoft/yii2-debug"]);
-              file_put_contents("composer.json", json_encode($composer, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
-              echo "Moved yiisoft/yii2-debug from require-dev to require\n";
-            } else {
-              echo "yiisoft/yii2-debug not found in require-dev, checking if it exists in require\n";
-              if (!isset($composer["require"]["yiisoft/yii2-debug"])) {
-                $composer["require"]["yiisoft/yii2-debug"] = "~2.1.0";
-                file_put_contents("composer.json", json_encode($composer, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
-                echo "Added yiisoft/yii2-debug to require\n";
-              }
-            }
-          '
+          echo "Current composer.json contents:"
           cat composer.json
-
-      - name: Validate composer.json and remove composer.lock
-        if: steps.check_files.outputs.exists == 'true'
-        run: |
-          composer validate --no-check-publish
-          # Si hay problemas con el lock file, es mejor regenerarlo
+          
+          # Eliminar completamente el archivo lock para forzar regeneración
           if [ -f "composer.lock" ]; then
             rm composer.lock
-            echo "Removed composer.lock to ensure clean installation"
+            echo "Removed composer.lock to force regeneration"
           fi
-
-      - name: Run composer install
+          
+          # Usar composer require en lugar de editar el archivo JSON manualmente
+          echo "Adding yiisoft/yii2-debug to main requirements using composer require"
+          composer require yiisoft/yii2-debug --no-update
+          
+          # Verificar si hay paquetes en require-dev que deberían estar en require
+          php -r '
+            $composer = json_decode(file_get_contents("composer.json"), true);
+            if (isset($composer["require-dev"])) {
+              foreach (["yiisoft/yii2-gii"] as $package) {
+                if (isset($composer["require-dev"][$package]) && !isset($composer["require"][$package])) {
+                  echo "Moving $package from require-dev to require\n";
+                  $composer["require"][$package] = $composer["require-dev"][$package];
+                  unset($composer["require-dev"][$package]);
+                }
+              }
+              file_put_contents("composer.json", json_encode($composer, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+            }
+          '
+          
+          echo "Updated composer.json contents:"
+          cat composer.json
+          
+      - name: Update composer dependencies
         if: steps.check_files.outputs.exists == 'true'
         run: |
-          composer install --prefer-dist --no-progress --optimize-autoloader --no-dev
+          # Actualizar todas las dependencias y regenerar el archivo lock
+          composer update --no-dev --prefer-dist --no-progress
 
       - name: Generate Yii2 cookie validation key
         run: |
