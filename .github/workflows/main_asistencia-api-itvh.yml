@@ -123,4 +123,4 @@ jobs:
         with:
           app-name: 'asistencia-api-itvh'
           slot-name: 'Production'
-          package: .
+          package: ./web  # <-- apuntas al directorio web
