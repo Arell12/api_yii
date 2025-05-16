@@ -193,18 +193,13 @@ jobs:
         uses: azure/cli@v2
         with:
           inlineScript: |
-            # Obtener el nombre del Resource Group
-            RESOURCE_GROUP=$(az webapp show --name asistencia-api-itvh --query resourceGroup --output tsv)
+            # Definir el Resource Group correctamente
+            RESOURCE_GROUP="asistencia-app"
       
-            # Verificar si se obtuvo correctamente
-            if [ -z "$RESOURCE_GROUP" ]; then
-              echo "ERROR: No se pudo obtener el Resource Group."
-              exit 1
-            fi
+            # Log para confirmar
+            echo "✅ Resource Group encontrado: $RESOURCE_GROUP"
       
-            echo "Resource Group encontrado: $RESOURCE_GROUP"
-      
-            # Configurar el comando de inicio
+            # Configurar el comando de inicio en Azure
             az webapp config set --name asistencia-api-itvh --resource-group $RESOURCE_GROUP --startup-file /home/site/wwwroot/startup.sh
 
       
