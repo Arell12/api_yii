@@ -50,36 +50,41 @@ jobs:
             "
           fi
 
-      - name: Create .htaccess for Apache URL rewriting
+      - name: Configure Nginx for Yii2
         run: |
-          # .htaccess en la raíz para redirigir a /web
-          echo 'RewriteEngine On
-          RewriteCond %{REQUEST_URI} !^/web/
-          RewriteRule ^(.*)$ /web/$1 [L]' > .htaccess
+          mkdir -p .nginx/conf.d
+          cat << EOF > .nginx/conf.d/default.conf
+          server {
+              listen 8080;
+              server_name localhost;
+              root /home/site/wwwroot/web;
+              index index.php;
 
-          # .htaccess dentro del directorio web para Yii2
-          mkdir -p web
-          echo 'RewriteEngine On
-          RewriteCond %{REQUEST_FILENAME} !-f
-          RewriteCond %{REQUEST_FILENAME} !-d
-          RewriteRule ^(.*)$ index.php?r=$1 [L,QSA]' > web/.htaccess
+              location / {
+                  try_files \$uri \$uri/ /index.php?\$args;
+              }
 
-      - name: Configure Apache startup script
-        run: |
-          # Crear script de inicio para Azure
-          echo "#!/bin/bash
-          cp /home/site/wwwroot/web/.htaccess /home/site/wwwroot/web/
-          service apache2 restart" > startup.sh
-          chmod +x startup.sh
+              location ~ \.php$ {
+                  fastcgi_pass 127.0.0.1:9000;
+                  fastcgi_index index.php;
+                  include fastcgi_params;
+                  fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
+              }
+
+              location ~ /\.ht {
+                  deny all;
+              }
+          }
+          EOF
 
       - name: Set permissions
         run: |
           mkdir -p runtime web/assets
           chmod -R 777 runtime web/assets
-          chmod 755 yii startup.sh
+          chmod 755 yii
 
       - name: Zip artifact for deployment
-        run: zip release.zip ./* -r
+        run: zip -r release.zip . .nginx/conf.d/default.conf
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
