@@ -111,7 +111,6 @@ jobs:
           }
           EOF
 
-
       - name: Create enhanced startup script
         run: |
           cat << EOF > startup.sh
@@ -131,6 +130,13 @@ jobs:
           else
             echo "ERROR: No se pudieron crear los directorios de almacenamiento."
           fi
+
+          # Configurar PHP-FPM para escuchar en el puerto 8181
+          echo "Configurando PHP-FPM para escuchar en el puerto 8181..."
+          mkdir -p /usr/local/etc/php-fpm.d
+          echo "[www]" > /usr/local/etc/php-fpm.d/z-custom.conf
+          echo "listen = 127.0.0.1:8181" >> /usr/local/etc/php-fpm.d/z-custom.conf
+          echo "Configuración de PHP-FPM actualizada."
 
           # Aplicar configuración de Nginx si existe
           if [ -f /home/site/wwwroot/.nginx/conf.d/default.conf ]; then
