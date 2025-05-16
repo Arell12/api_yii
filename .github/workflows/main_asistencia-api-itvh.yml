@@ -1,6 +1,5 @@
 # Docs for the Azure Web Apps Deploy action: https://github.com/Azure/webapps-deploy
 # More GitHub Actions for Azure: https://github.com/Azure/actions
-
 name: Build and deploy PHP app to Azure Web App - asistencia-api-itvh
 
 on:
@@ -13,7 +12,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: read #This is required for actions/checkout
+      contents: read
 
     steps:
       - uses: actions/checkout@v4
@@ -24,7 +23,7 @@ jobs:
           php-version: '8.2'
           extensions: intl, gd, zip, pdo_mysql
           
-      - name: Check if composer.json exists
+      - name: Check composer.json
         id: check_files
         run: |
           if [ -f "composer.json" ]; then
@@ -33,7 +32,7 @@ jobs:
             echo "exists=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Run composer install if composer.json exists
+      - name: Run composer install
         if: steps.check_files.outputs.exists == 'true'
         run: |
           composer validate --no-check-publish
@@ -42,62 +41,47 @@ jobs:
       - name: Generate Yii2 cookie validation key
         run: |
           if [ -f "config/web.php" ]; then
-            # Approach 1: Display the file for debugging
-            cat config/web.php
-            
-            # Approach 2: Use a more robust approach for cookie key generation
             php -r "
               \$config = file_get_contents('config/web.php');
               if (strpos(\$config, \"'cookieValidationKey' => ''\") !== false) {
                 \$config = str_replace(\"'cookieValidationKey' => ''\", \"'cookieValidationKey' => '\".bin2hex(random_bytes(32)).\"'\", \$config);
                 file_put_contents('config/web.php', \$config);
-                echo \"Cookie validation key generated successfully.\n\";
-              } else if (strpos(\$config, '\"cookieValidationKey\" => \"\"') !== false) {
-                \$config = str_replace('\"cookieValidationKey\" => \"\"', '\"cookieValidationKey\" => \"'.bin2hex(random_bytes(32)).'\"', \$config);
-                file_put_contents('config/web.php', \$config);
-                echo \"Cookie validation key generated successfully.\n\";
-              } else {
-                echo \"Cookie validation key seems to be already set or uses a different format.\n\";
               }
             "
-          else
-            echo "config/web.php file not found"
           fi
-          
-      - name: Set proper permissions for runtime directories
+
+      - name: Create .htaccess for Apache URL rewriting
+        run: |
+          # .htaccess en la raíz para redirigir a /web
+          echo 'RewriteEngine On
+          RewriteCond %{REQUEST_URI} !^/web/
+          RewriteRule ^(.*)$ /web/$1 [L]' > .htaccess
+
+          # .htaccess dentro del directorio web para Yii2
+          mkdir -p web
+          echo 'RewriteEngine On
+          RewriteCond %{REQUEST_FILENAME} !-f
+          RewriteCond %{REQUEST_FILENAME} !-d
+          RewriteRule ^(.*)$ index.php?r=$1 [L,QSA]' > web/.htaccess
+
+      - name: Configure Apache startup script
+        run: |
+          # Crear script de inicio para Azure
+          echo "#!/bin/bash
+          cp /home/site/wwwroot/web/.htaccess /home/site/wwwroot/web/
+          service apache2 restart" > startup.sh
+          chmod +x startup.sh
+
+      - name: Set permissions
         run: |
           mkdir -p runtime web/assets
           chmod -R 777 runtime web/assets
-          if [ -f "yii" ]; then
-            chmod 755 yii
-          fi
-
-      - name: Create web.config for URL rewriting
-        run: |
-          if [ ! -f "web.config" ]; then
-            echo '<?xml version="1.0" encoding="UTF-8"?>
-            <configuration>
-                <system.webServer>
-                    <rewrite>
-                        <rules>
-                            <rule name="Rewrite to index.php" stopProcessing="true">
-                                <match url="^(.*)$" />
-                                <conditions logicalGrouping="MatchAll">
-                                    <add input="{REQUEST_FILENAME}" matchType="IsFile" negate="true" />
-                                    <add input="{REQUEST_FILENAME}" matchType="IsDirectory" negate="true" />
-                                </conditions>
-                                <action type="Rewrite" url="web/index.php?r={R:1}" />
-                            </rule>
-                        </rules>
-                    </rewrite>
-                </system.webServer>
-            </configuration>' > web.config
-          fi
+          chmod 755 yii startup.sh
 
       - name: Zip artifact for deployment
         run: zip release.zip ./* -r
 
-      - name: Upload artifact for deployment job
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: php-app
@@ -110,25 +94,25 @@ jobs:
       name: 'Production'
       url: ${{ steps.deploy-to-webapp.outputs.webapp-url }}
     permissions:
-      id-token: write #This is required for requesting the JWT
-      contents: read #This is required for actions/checkout
+      id-token: write
+      contents: read
 
     steps:
-      - name: Download artifact from build job
+      - name: Download artifact
         uses: actions/download-artifact@v4
         with:
           name: php-app
 
-      - name: Unzip artifact for deployment
+      - name: Unzip artifact
         run: unzip release.zip
-      
+
       - name: Login to Azure
         uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
           auth-type: "SERVICE_PRINCIPAL"
     
-      - name: 'Deploy to Azure Web App'
+      - name: Deploy to Azure Web App
         uses: azure/webapps-deploy@v3
         id: deploy-to-webapp
         with:
