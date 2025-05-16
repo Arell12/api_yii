@@ -36,7 +36,7 @@ jobs:
         if: steps.check_files.outputs.exists == 'true'
         run: |
           composer validate --no-check-publish
-          composer install --prefer-dist --no-progress --no-dev --optimize-autoloader
+          composer install --prefer-dist --no-progress --no-dev --optimize-autoloader  
 
       - name: Generate Yii2 cookie validation key
         run: |
