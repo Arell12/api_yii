@@ -42,9 +42,9 @@ jobs:
             echo "Removed composer.lock to force regeneration"
           fi
           
-          # Usar composer require en lugar de editar el archivo JSON manualmente
-          echo "Adding yiisoft/yii2-debug to main requirements using composer require"
-          composer require yiisoft/yii2-debug --no-update
+          # Usar composer require con una versión específica compatible con Yii2 2.0.x
+          echo "Adding yiisoft/yii2-debug with version constraint compatible with Yii 2.0.x"
+          composer require yiisoft/yii2-debug "~2.1.0" --no-update
           
           # Verificar si hay paquetes en require-dev que deberían estar en require
           php -r '
@@ -68,7 +68,7 @@ jobs:
         if: steps.check_files.outputs.exists == 'true'
         run: |
           # Actualizar todas las dependencias y regenerar el archivo lock
-          composer update --no-dev --prefer-dist --no-progress
+          composer update --no-dev --prefer-dist
 
       - name: Generate Yii2 cookie validation key
         run: |
