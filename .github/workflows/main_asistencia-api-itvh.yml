@@ -1,0 +1,128 @@
+# Docs for the Azure Web Apps Deploy action: https://github.com/Azure/webapps-deploy
+# More GitHub Actions for Azure: https://github.com/Azure/actions
+name: Build and deploy PHP app to Azure Web App - asistencia-api-itvh
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: intl, gd, zip, pdo_mysql
+          
+      - name: Check composer.json
+        id: check_files
+        run: |
+          if [ -f "composer.json" ]; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Run composer install
+        if: steps.check_files.outputs.exists == 'true'
+        run: |
+          composer validate --no-check-publish
+          composer install --prefer-dist --no-progress --no-dev --optimize-autoloader
+
+      - name: Generate Yii2 cookie validation key
+        run: |
+          if [ -f "config/web.php" ]; then
+            php -r "
+              \$config = file_get_contents('config/web.php');
+              if (strpos(\$config, \"'cookieValidationKey' => ''\") !== false) {
+                \$config = str_replace(\"'cookieValidationKey' => ''\", \"'cookieValidationKey' => '\".bin2hex(random_bytes(32)).\"'\", \$config);
+                file_put_contents('config/web.php', \$config);
+              }
+            "
+          fi
+
+      - name: Configure Nginx for Yii2
+        run: |
+          mkdir -p .nginx/conf.d
+          cat << EOF > .nginx/conf.d/default.conf
+          server {
+              listen 8080;
+              server_name localhost;
+              root /home/site/wwwroot/web;
+              index index.php;
+
+              location / {
+                  try_files \$uri \$uri/ /index.php?\$args;
+              }
+
+              location ~ \.php$ {
+                  fastcgi_pass 127.0.0.1:9000;
+                  fastcgi_index index.php;
+                  include fastcgi_params;
+                  fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
+              }
+
+              location ~ /\.ht {
+                  deny all;
+              }
+          }
+          EOF
+
+      - name: Set permissions
+        run: |
+          mkdir -p runtime web/assets
+          chmod -R 777 runtime web/assets
+          if [ -f "yii" ]; then
+            chmod 755 yii
+          fi
+
+      - name: Zip artifact for deployment
+        run: zip -r release.zip .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: php-app
+          path: release.zip
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build
+    environment:
+      name: 'Production'
+      url: ${{ steps.deploy-to-webapp.outputs.webapp-url }}
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: php-app
+
+      - name: Unzip artifact
+        run: unzip release.zip
+
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+          auth-type: "SERVICE_PRINCIPAL"
+    
+      - name: Deploy to Azure Web App
+        uses: azure/webapps-deploy@v3
+        id: deploy-to-webapp
+        with:
+          app-name: 'asistencia-api-itvh'
+          slot-name: 'Production'
+          package: . 
