@@ -1,3 +1,5 @@
+# Docs for the Azure Web Apps Deploy action: https://github.com/Azure/webapps-deploy
+# More GitHub Actions for Azure: https://github.com/Azure/actions
 name: Build and deploy PHP app to Azure Web App - asistencia-api-itvh
 
 on:
@@ -30,108 +32,22 @@ jobs:
             echo "exists=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Fix Composer dependencies and lock file
+      - name: Run composer install
         if: steps.check_files.outputs.exists == 'true'
         run: |
-          echo "Current composer.json contents:"
-          cat composer.json
-          
-          # Eliminar completamente el archivo lock para forzar regeneración
-          if [ -f "composer.lock" ]; then
-            rm composer.lock
-            echo "Removed composer.lock to force regeneration"
-          fi
-          
-          # Usar composer require con una versión específica compatible con Yii2 2.0.x
-          echo "Adding yiisoft/yii2-debug with version constraint compatible with Yii 2.0.x"
-          composer require yiisoft/yii2-debug "~2.1.0" --no-update
-          
-          # Verificar si hay paquetes en require-dev que deberían estar en require
-          php -r '
-            $composer = json_decode(file_get_contents("composer.json"), true);
-            if (isset($composer["require-dev"])) {
-              foreach (["yiisoft/yii2-gii"] as $package) {
-                if (isset($composer["require-dev"][$package]) && !isset($composer["require"][$package])) {
-                  echo "Moving $package from require-dev to require\n";
-                  $composer["require"][$package] = $composer["require-dev"][$package];
-                  unset($composer["require-dev"][$package]);
-                }
-              }
-              file_put_contents("composer.json", json_encode($composer, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
-            }
-          '
-          
-          echo "Updated composer.json contents:"
-          cat composer.json
-          
-      - name: Update composer dependencies
-        if: steps.check_files.outputs.exists == 'true'
-        run: |
-          # Actualizar todas las dependencias y regenerar el archivo lock
-          composer update --no-dev --prefer-dist
+          composer validate --no-check-publish
+          composer install --prefer-dist --no-progress --no-dev --optimize-autoloader  
 
       - name: Generate Yii2 cookie validation key
         run: |
           if [ -f "config/web.php" ]; then
-            php -r ' 
-              $config = file_get_contents("config/web.php");
-              if (strpos($config, "\'cookieValidationKey\' => \'\'") !== false) {
-                $key = bin2hex(random_bytes(32));
-                $config = str_replace("\'cookieValidationKey\' => \'\'", "\'cookieValidationKey\' => \'$key\'", $config);
-                file_put_contents("config/web.php", $config);
-                echo "Generated cookie validation key: $key\n";
-              } else {
-                echo "Cookie validation key already exists\n";
+            php -r "
+              \$config = file_get_contents('config/web.php');
+              if (strpos(\$config, \"'cookieValidationKey' => ''\") !== false) {
+                \$config = str_replace(\"'cookieValidationKey' => ''\", \"'cookieValidationKey' => '\".bin2hex(random_bytes(32)).\"'\", \$config);
+                file_put_contents('config/web.php', \$config);
               }
-            '
-          fi
-
-      - name: Set production environment
-        run: |
-          if [ -f "web/index.php" ]; then
-            cat > web/index.php.new << 'EOF'
-            <?php
-            defined('YII_DEBUG') or define('YII_DEBUG', false);
-            defined('YII_ENV') or define('YII_ENV', 'prod');
-            EOF
-            
-            cat web/index.php | grep -v "YII_DEBUG\|YII_ENV" >> web/index.php.new
-            mv web/index.php.new web/index.php
-            echo "Set YII_ENV to 'prod' and YII_DEBUG to false"
-          fi
-
-      - name: Configure web.php for production environment
-        run: |
-          if [ -f "config/web.php" ]; then
-            echo "Backing up original web.php"
-            cp config/web.php config/web.php.bak
-            
-            echo "Setting production configuration in web.php"
-            php -r '
-              $config = file_get_contents("config/web.php");
-              
-              // Asegurar que YII_DEBUG y YII_ENV estén definidos correctamente
-              $configWithoutDebug = preg_replace("/defined\s*\(\s*[\'\"]{1}YII_DEBUG[\'\"]{1}\s*\)\s*or\s*define\s*\(\s*[\'\"]{1}YII_DEBUG[\'\"]{1}\s*,\s*([^\)]+)\s*\)/", "defined(\"YII_DEBUG\") or define(\"YII_DEBUG\", false)", $config);
-              $configWithoutEnv = preg_replace("/defined\s*\(\s*[\'\"]{1}YII_ENV[\'\"]{1}\s*\)\s*or\s*define\s*\(\s*[\'\"]{1}YII_ENV[\'\"]{1}\s*,\s*([^\)]+)\s*\)/", "defined(\"YII_ENV\") or define(\"YII_ENV\", \"prod\")", $configWithoutDebug);
-              
-              // Asegurar que bootstrap solo incluya log
-              $pattern = "/([\"\'])bootstrap[\"\']\s*=>\s*\[(.*?)\]/s";
-              $replacement = "$1bootstrap$1 => [\'log\']";
-              $configWithBootstrap = preg_replace($pattern, $replacement, $configWithoutEnv);
-              
-              // Eliminar los módulos debug y gii si existen
-              $pattern1 = "/([\"\'])modules[\"\']\s*=>\s*\[(.*?)\'debug\'\s*=>\s*\[(.*?)\],?/s";
-              $pattern2 = "/([\"\'])modules[\"\']\s*=>\s*\[(.*?)\'gii\'\s*=>\s*\[(.*?)\],?/s";
-              $configWithoutDebugModule = preg_replace($pattern1, "$1modules$1 => [$2", $configWithBootstrap);
-              $configFinal = preg_replace($pattern2, "$1modules$1 => [$2", $configWithoutDebugModule);
-              
-              file_put_contents("config/web.php", $configFinal);
-            '
-            
-            echo "Checking updated web.php configuration"
-            cat config/web.php
-          else
-            echo "Warning: config/web.php not found. Skipping web.php configuration."
+            "
           fi
 
       - name: Configure Nginx for Yii2
@@ -153,54 +69,19 @@ jobs:
                   fastcgi_index index.php;
                   include fastcgi_params;
                   fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
-                  fastcgi_param PATH_INFO \$fastcgi_path_info;
-                  fastcgi_split_path_info ^(.+\.php)(/.+)$;
               }
 
-              location ~ /\.(ht|svn|git) {
+              location ~ /\.ht {
                   deny all;
               }
           }
           EOF
 
-      - name: Create .htaccess files for correct routing
-        run: |
-          # Crear .htaccess en la raíz del proyecto para redirigir a /web/
-          echo "Options +FollowSymLinks" > .htaccess
-          echo "IndexIgnore */*" >> .htaccess
-          echo "RewriteEngine on" >> .htaccess
-          echo "" >> .htaccess
-          echo "# Redireccionar todo a /web/" >> .htaccess
-          echo "RewriteCond %{REQUEST_URI} !^/(web)" >> .htaccess
-          echo "RewriteRule (.*) /web/$1" >> .htaccess
-          
-          # Crear .htaccess en /web/ para manejar rutas internas
-          mkdir -p web
-          echo "RewriteEngine on" > web/.htaccess
-          echo "RewriteBase /" >> web/.htaccess
-          echo "" >> web/.htaccess
-          echo "# Si un directorio o un archivo existe, usarlo directamente" >> web/.htaccess
-          echo "RewriteCond %{REQUEST_FILENAME} !-f" >> web/.htaccess
-          echo "RewriteCond %{REQUEST_FILENAME} !-d" >> web/.htaccess
-          echo "" >> web/.htaccess
-          echo "# En otro caso, redirigir a index.php" >> web/.htaccess
-          echo "RewriteRule . index.php" >> web/.htaccess
-          
-          echo "Created .htaccess files for proper redirection"
-          
-          echo "Content of root .htaccess:"
-          cat .htaccess
-          
-          echo "Content of web/.htaccess:"
-          cat web/.htaccess
-
       - name: Set permissions
         run: |
           mkdir -p runtime web/assets
           chmod -R 777 runtime web/assets
-          if [ -f "yii" ]; then
-            chmod 755 yii
-          fi
+          chmod 755 yii
 
       - name: Zip artifact for deployment
         run: zip -r release.zip . .nginx/conf.d/default.conf
