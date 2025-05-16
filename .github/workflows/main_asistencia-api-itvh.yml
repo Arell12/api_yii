@@ -22,7 +22,8 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.2'
-
+          extensions: intl, gd, zip, pdo_mysql
+          
       - name: Check if composer.json exists
         id: check_files
         uses: andstor/file-existence-action@v1
@@ -31,7 +32,43 @@ jobs:
 
       - name: Run composer install if composer.json exists
         if: steps.check_files.outputs.files_exists == 'true'
-        run: composer validate --no-check-publish && composer install --prefer-dist --no-progress
+        run: |
+          composer validate --no-check-publish
+          composer install --prefer-dist --no-progress --no-dev --optimize-autoloader
+
+      - name: Generate Yii2 cookie validation key
+        run: |
+          if [ -f "config/web.php" ]; then
+            php -r "file_put_contents('config/web.php', str_replace('cookieValidationKey' => '', 'cookieValidationKey' => ''.bin2hex(random_bytes(32)).'', file_get_contents('config/web.php')));"
+          fi
+          
+      - name: Set proper permissions for runtime directories
+        run: |
+          mkdir -p runtime web/assets
+          chmod -R 777 runtime web/assets
+          chmod 755 yii
+
+      - name: Create web.config for URL rewriting
+        run: |
+          if [ ! -f "web.config" ]; then
+            echo '<?xml version="1.0" encoding="UTF-8"?>
+            <configuration>
+                <system.webServer>
+                    <rewrite>
+                        <rules>
+                            <rule name="Rewrite to index.php" stopProcessing="true">
+                                <match url="^(.*)$" />
+                                <conditions logicalGrouping="MatchAll">
+                                    <add input="{REQUEST_FILENAME}" matchType="IsFile" negate="true" />
+                                    <add input="{REQUEST_FILENAME}" matchType="IsDirectory" negate="true" />
+                                </conditions>
+                                <action type="Rewrite" url="web/index.php?r={R:1}" />
+                            </rule>
+                        </rules>
+                    </rewrite>
+                </system.webServer>
+            </configuration>' > web.config
+          fi
 
       - name: Zip artifact for deployment
         run: zip release.zip ./* -r
@@ -64,9 +101,9 @@ jobs:
       - name: Login to Azure
         uses: azure/login@v2
         with:
-          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_BBB95A7D375A41F1BBBC47E64DD49796 }}
-          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_567D8F07055C4A0E97516F32AA67AC7E }}
-          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_A2D8B73E8FBD452A994488E137FE9289 }}
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: 'Deploy to Azure Web App'
         uses: azure/webapps-deploy@v3
@@ -75,4 +112,3 @@ jobs:
           app-name: 'asistencia-api-itvh'
           slot-name: 'Production'
           package: .
-          
