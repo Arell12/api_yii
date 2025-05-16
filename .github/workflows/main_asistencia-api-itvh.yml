@@ -73,18 +73,19 @@ jobs:
       - name: Generate Yii2 cookie validation key
         run: |
           if [ -f "config/web.php" ]; then
-            php -r '
-              \$config = file_get_contents('config/web.php');
-              if (strpos(\$config, \"'cookieValidationKey' => ''\") !== false) {
-                \$key = bin2hex(random_bytes(32));
-                \$config = str_replace(\"'cookieValidationKey' => ''\", \"'cookieValidationKey' => '\$key'\", \$config);
-                file_put_contents('config/web.php', \$config);
-                echo \"Generated cookie validation key: \$key\n\";
+            php -r ' 
+              $config = file_get_contents("config/web.php");
+              if (strpos($config, "\'cookieValidationKey\' => \'\'") !== false) {
+                $key = bin2hex(random_bytes(32));
+                $config = str_replace("\'cookieValidationKey\' => \'\'", "\'cookieValidationKey\' => \'$key\'", $config);
+                file_put_contents("config/web.php", $config);
+                echo "Generated cookie validation key: $key\n";
               } else {
-                echo \"Cookie validation key already exists\n\";
+                echo "Cookie validation key already exists\n";
               }
             '
           fi
+
 
       - name: Set production environment
         run: |
