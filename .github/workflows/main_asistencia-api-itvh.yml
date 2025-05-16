@@ -99,7 +99,7 @@ jobs:
               }
 
               location ~ \.php$ {
-                  fastcgi_pass 127.0.0.1:9000;
+                  fastcgi_pass 127.0.0.1:8181; 
                   fastcgi_index index.php;
                   include fastcgi_params;
                   fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
@@ -110,6 +110,7 @@ jobs:
               }
           }
           EOF
+
 
       - name: Create enhanced startup script
         run: |
@@ -151,7 +152,7 @@ jobs:
 
           # Iniciar PHP-FPM
           echo "Iniciando PHP-FPM..."
-          php-fpm
+          php-fpm --nodaemonize --fpm-config /usr/local/etc/php-fpm.conf
           EOF
           chmod +x startup.sh
 
