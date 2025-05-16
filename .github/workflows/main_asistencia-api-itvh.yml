@@ -86,14 +86,14 @@ jobs:
             '
           fi
 
-
       - name: Set production environment
         run: |
           if [ -f "web/index.php" ]; then
-            echo "<?php 
+            cat > web/index.php.new << 'EOF'
+            <?php
             defined('YII_DEBUG') or define('YII_DEBUG', false);
             defined('YII_ENV') or define('YII_ENV', 'prod');
-            " > web/index.php.new
+            EOF
             
             cat web/index.php | grep -v "YII_DEBUG\|YII_ENV" >> web/index.php.new
             mv web/index.php.new web/index.php
