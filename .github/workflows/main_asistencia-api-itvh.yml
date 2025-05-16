@@ -1,4 +1,5 @@
 name: Build and deploy PHP app to Azure Web App - asistencia-api-itvh
+
 on:
   push:
     branches:
@@ -98,24 +99,38 @@ jobs:
             echo "Set YII_ENV to 'prod' and YII_DEBUG to false"
           fi
 
-      - name: Configure production modules
+      - name: Configure web.php for production environment
         run: |
           if [ -f "config/web.php" ]; then
-            php -r "
-              \$config = file_get_contents('config/web.php');
+            echo "Backing up original web.php"
+            cp config/web.php config/web.php.bak
+            
+            echo "Setting production configuration in web.php"
+            php -r '
+              $config = file_get_contents("config/web.php");
               
-              // Asegurar que el bootstrap sea solo 'log'
-              \$config = preg_replace(\"/'bootstrap' => \[[^\]]*\]/\", \"'bootstrap' => ['log']\", \$config);
+              // Asegurar que YII_DEBUG y YII_ENV estén definidos correctamente
+              $configWithoutDebug = preg_replace("/defined\s*\(\s*[\'\"]{1}YII_DEBUG[\'\"]{1}\s*\)\s*or\s*define\s*\(\s*[\'\"]{1}YII_DEBUG[\'\"]{1}\s*,\s*([^\)]+)\s*\)/", "defined(\"YII_DEBUG\") or define(\"YII_DEBUG\", false)", $config);
+              $configWithoutEnv = preg_replace("/defined\s*\(\s*[\'\"]{1}YII_ENV[\'\"]{1}\s*\)\s*or\s*define\s*\(\s*[\'\"]{1}YII_ENV[\'\"]{1}\s*,\s*([^\)]+)\s*\)/", "defined(\"YII_ENV\") or define(\"YII_ENV\", \"prod\")", $configWithoutDebug);
+              
+              // Asegurar que bootstrap solo incluya log
+              $pattern = "/([\"\'])bootstrap[\"\']\s*=>\s*\[(.*?)\]/s";
+              $replacement = "$1bootstrap$1 => [\'log\']";
+              $configWithBootstrap = preg_replace($pattern, $replacement, $configWithoutEnv);
               
               // Eliminar los módulos debug y gii si existen
-              if (strpos(\$config, \"'modules' => [\") !== false) {
-                \$config = preg_replace(\"/('debug' => \[([^]]*)\],?)/s\", \"\", \$config);
-                \$config = preg_replace(\"/('gii' => \[([^]]*)\],?)/s\", \"\", \$config);
-              }
+              $pattern1 = "/([\"\'])modules[\"\']\s*=>\s*\[(.*?)\'debug\'\s*=>\s*\[(.*?)\],?/s";
+              $pattern2 = "/([\"\'])modules[\"\']\s*=>\s*\[(.*?)\'gii\'\s*=>\s*\[(.*?)\],?/s";
+              $configWithoutDebugModule = preg_replace($pattern1, "$1modules$1 => [$2", $configWithBootstrap);
+              $configFinal = preg_replace($pattern2, "$1modules$1 => [$2", $configWithoutDebugModule);
               
-              file_put_contents('config/web.php', \$config);
-              echo \"Removed debug and gii modules from configuration\n\";
-            "
+              file_put_contents("config/web.php", $configFinal);
+            '
+            
+            echo "Checking updated web.php configuration"
+            cat config/web.php
+          else
+            echo "Warning: config/web.php not found. Skipping web.php configuration."
           fi
 
       - name: Configure Nginx for Yii2
@@ -147,21 +162,36 @@ jobs:
           }
           EOF
 
-      - name: Create .htaccess
+      - name: Create .htaccess files for correct routing
         run: |
-          if [ ! -f "web/.htaccess" ]; then
-            mkdir -p web
-            echo 'RewriteEngine on' > web/.htaccess
-            echo '' >> web/.htaccess
-            echo '# Si el directorio o archivo no existe, continuar con la siguiente regla' >> web/.htaccess
-            echo 'RewriteCond %{REQUEST_FILENAME} !-f' >> web/.htaccess
-            echo 'RewriteCond %{REQUEST_FILENAME} !-d' >> web/.htaccess
-            echo '' >> web/.htaccess
-            echo '# En caso contrario, redireccionar a index.php' >> web/.htaccess
-            echo 'RewriteRule . index.php' >> web/.htaccess
-            
-            echo "Created .htaccess file for Apache"
-          fi
+          # Crear .htaccess en la raíz del proyecto para redirigir a /web/
+          echo "Options +FollowSymLinks" > .htaccess
+          echo "IndexIgnore */*" >> .htaccess
+          echo "RewriteEngine on" >> .htaccess
+          echo "" >> .htaccess
+          echo "# Redireccionar todo a /web/" >> .htaccess
+          echo "RewriteCond %{REQUEST_URI} !^/(web)" >> .htaccess
+          echo "RewriteRule (.*) /web/$1" >> .htaccess
+          
+          # Crear .htaccess en /web/ para manejar rutas internas
+          mkdir -p web
+          echo "RewriteEngine on" > web/.htaccess
+          echo "RewriteBase /" >> web/.htaccess
+          echo "" >> web/.htaccess
+          echo "# Si un directorio o un archivo existe, usarlo directamente" >> web/.htaccess
+          echo "RewriteCond %{REQUEST_FILENAME} !-f" >> web/.htaccess
+          echo "RewriteCond %{REQUEST_FILENAME} !-d" >> web/.htaccess
+          echo "" >> web/.htaccess
+          echo "# En otro caso, redirigir a index.php" >> web/.htaccess
+          echo "RewriteRule . index.php" >> web/.htaccess
+          
+          echo "Created .htaccess files for proper redirection"
+          
+          echo "Content of root .htaccess:"
+          cat .htaccess
+          
+          echo "Content of web/.htaccess:"
+          cat web/.htaccess
 
       - name: Set permissions
         run: |
