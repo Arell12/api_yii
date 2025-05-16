@@ -130,4 +130,4 @@ jobs:
             service nginx reload
           else
             echo "No se encontró el directorio .nginx/conf.d en App Service."
-          }
+          fi
