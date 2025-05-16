@@ -1,5 +1,3 @@
-# Docs for the Azure Web Apps Deploy action: https://github.com/Azure/webapps-deploy
-# More GitHub Actions for Azure: https://github.com/Azure/actions
 name: Build and deploy PHP app to Azure Web App - asistencia-api-itvh
 
 on:
@@ -32,11 +30,25 @@ jobs:
             echo "exists=false" >> $GITHUB_OUTPUT
           fi
 
+      - name: Update composer.json to include debug module in main requirements
+        if: steps.check_files.outputs.exists == 'true'
+        run: |
+          # Mover yii2-debug de require-dev a require
+          php -r '
+            $composer = json_decode(file_get_contents("composer.json"), true);
+            if (isset($composer["require-dev"]["yiisoft/yii2-debug"])) {
+              $debug_version = $composer["require-dev"]["yiisoft/yii2-debug"];
+              $composer["require"]["yiisoft/yii2-debug"] = $debug_version;
+              unset($composer["require-dev"]["yiisoft/yii2-debug"]);
+              file_put_contents("composer.json", json_encode($composer, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+            }
+          '
+
       - name: Run composer install
         if: steps.check_files.outputs.exists == 'true'
         run: |
           composer validate --no-check-publish
-          composer install --prefer-dist --no-progress --no-dev --optimize-autoloader  
+          composer install --prefer-dist --no-progress --optimize-autoloader  # Quitamos --no-dev para instalar debug y gii
 
       - name: Generate Yii2 cookie validation key
         run: |
@@ -47,6 +59,28 @@ jobs:
                 \$config = str_replace(\"'cookieValidationKey' => ''\", \"'cookieValidationKey' => '\".bin2hex(random_bytes(32)).\"'\", \$config);
                 file_put_contents('config/web.php', \$config);
               }
+            "
+          fi
+
+      - name: Ensure YII_ENV is set to 'prod' and check bootstrap configuration
+        run: |
+          # Primero, asegurémonos que el entorno es de producción
+          echo "<?php 
+          defined('YII_DEBUG') or define('YII_DEBUG', false);
+          defined('YII_ENV') or define('YII_ENV', 'prod');
+          " > web/index.php.new
+          
+          if [ -f "web/index.php" ]; then
+            cat web/index.php | grep -v "YII_DEBUG\|YII_ENV" >> web/index.php.new
+            mv web/index.php.new web/index.php
+          fi
+          
+          # Verificar que debug y gii no estén en el bootstrap
+          if [ -f "config/web.php" ]; then
+            php -r "
+              \$config = file_get_contents('config/web.php');
+              \$config = preg_replace(\"/'bootstrap' => \['log', 'debug', 'gii'\]/\", \"'bootstrap' => ['log']\", \$config);
+              file_put_contents('config/web.php', \$config);
             "
           fi
 
