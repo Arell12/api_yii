@@ -3,7 +3,6 @@ name: Deploy Yii2 to Azure App Service
 on:
   push:
     branches: [ main ]
-  workflow_dispatch:
 
 env:
   AZURE_WEBAPP_NAME: asistencia-api-itvh
@@ -30,9 +29,9 @@ jobs:
         composer install --prefer-dist --no-dev --optimize-autoloader
         composer dump-autoload --optimize
 
-    - name: Prepare Yii2 for Azure
+    - name: Configure Yii2 for production
       run: |
-        # Configuración mínima de index.php
+        # Configuración de producción en index.php
         cat << 'EOF' > web/index.php
         <?php
         defined('YII_DEBUG') or define('YII_DEBUG', false);
@@ -46,30 +45,28 @@ jobs:
         (new yii\web\Application($config))->run();
         EOF
 
-        # Configuración de assetManager en web.php
+        # Configuración de assetManager
         sed -i "/'components' => \[/a \
         'assetManager' => [\n\
             'basePath' => '@webroot/assets',\n\
             'baseUrl' => '@web/assets',\n\
-            'hashCallback' => function (\$path) {\n\
-                return hash('md4', \$path);\n\
-            },\n\
         ]," config/web.php
 
-    - name: Create startup script for Azure
+        # Crear directorios necesarios
+        mkdir -p web/assets
+        chmod -R 755 web/assets
+        chmod -R 755 runtime
+
+    - name: Create optimized startup script
       run: |
         cat << 'EOF' > startup.sh
         #!/bin/bash
 
         # =============================================
-        # CONFIGURACIÓN OPTIMIZADA PARA AZURE APP SERVICE
+        # CONFIGURACIÓN OPTIMIZADA PARA AZURE
         # =============================================
 
-        # 1. Detener servicios previos (si existen)
-        pkill -f "nginx" || true
-        pkill -f "php-fpm" || true
-
-        # 2. Configurar PHP-FPM para usar puerto alternativo
+        # 1. Configurar PHP-FPM
         echo "Configurando PHP-FPM..."
         cat > /usr/local/etc/php-fpm.d/zz-azure.conf << 'EOL'
         [www]
@@ -86,14 +83,19 @@ jobs:
         pm.max_spare_servers = 3
         EOL
 
-        # 3. Configurar Nginx para puerto alternativo
+        # 2. Configurar Nginx correctamente para Yii2
         echo "Configurando Nginx..."
         cat > /etc/nginx/conf.d/default.conf << 'EOL'
         server {
-            listen 8081;
+            listen 8080;
             server_name localhost;
             root /home/site/wwwroot/web;
             index index.php;
+
+            # Configuración de seguridad
+            add_header X-Frame-Options "SAMEORIGIN";
+            add_header X-XSS-Protection "1; mode=block";
+            add_header X-Content-Type-Options "nosniff";
 
             location / {
                 try_files \$uri \$uri/ /index.php?\$args;
@@ -102,19 +104,17 @@ jobs:
             location ~ \.php$ {
                 fastcgi_pass unix:/tmp/php-fpm.sock;
                 fastcgi_index index.php;
-                fastcgi_param SCRIPT_FILENAME \$realpath_root\$fastcgi_script_name;
+                fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
                 include fastcgi_params;
+            }
+
+            location ~ /\.(ht|svn|git) {
+                deny all;
             }
         }
         EOL
 
-        # 4. Asegurar directorios con permisos correctos
-        echo "Configurando permisos..."
-        mkdir -p /home/site/wwwroot/web/assets
-        chmod -R 755 /home/site/wwwroot/web/assets
-        chmod -R 755 /home/site/wwwroot/runtime
-
-        # 5. Iniciar servicios
+        # 3. Iniciar servicios
         echo "Iniciando PHP-FPM..."
         php-fpm -D
 
@@ -147,7 +147,7 @@ jobs:
             --resource-group ${{ env.RESOURCE_GROUP }} \
             --settings \
               WEBSITES_ENABLE_APP_SERVICE_STORAGE=true \
-              WEBSITES_PORT=8081 \
+              WEBSITES_PORT=8080 \
               PHP_FPM_MAX_CHILDREN=10 \
               PHP_FPM_START_SERVERS=2 \
               PHP_FPM_MIN_SPARE_SERVERS=1 \
