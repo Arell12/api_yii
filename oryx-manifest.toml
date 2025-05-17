@@ -1,4 +1,0 @@
-[build]
-appPath = "/home/site/wwwroot"
-platform = "php"
-platformVersion = "8.2"

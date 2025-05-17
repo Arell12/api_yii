@@ -40,7 +40,7 @@ $config = [
 
         // Añade la configuración del assetManager aquí
         'assetManager' => [
-            'basePath' => '/home/site/wwwroot/web/assets', // Ruta absoluta para Azure
+            'basePath' => '@webroot/assets',
             'baseUrl' => '@web/assets',
             'hashCallback' => function ($path) {
                 return hash('md4', $path);
