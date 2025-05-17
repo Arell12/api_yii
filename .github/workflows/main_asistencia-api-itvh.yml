@@ -52,11 +52,13 @@ jobs:
             'baseUrl' => '@web/assets',\n\
         ]," config/web.php
 
-        # Crear directorios necesarios
-        mkdir -p web/assets
-        chmod -R 755 web/assets
-        chmod -R 755 runtime
+        # Crear directorios necesarios y establecer permisos
+        mkdir -p web/assets runtime
+        chmod -R 777 web/assets
+        chmod -R 777 runtime
+        chmod -R 777 web
 
+    # Modificar el startup script para evitar conflictos de puertos
     - name: Create optimized startup script
       run: |
         cat << 'EOF' > startup.sh
@@ -65,6 +67,11 @@ jobs:
         # =============================================
         # CONFIGURACIÓN OPTIMIZADA PARA AZURE
         # =============================================
+
+        # Detener cualquier servicio existente
+        echo "Deteniendo servicios existentes..."
+        pkill -f nginx || true
+        pkill -f php-fpm || true
 
         # 1. Configurar PHP-FPM
         echo "Configurando PHP-FPM..."
@@ -85,7 +92,7 @@ jobs:
 
         # 2. Configurar Nginx correctamente para Yii2
         echo "Configurando Nginx..."
-        cat > /etc/nginx/conf.d/default.conf << 'EOL'
+        cat > /etc/nginx/sites-available/default << 'EOL'
         server {
             listen 8080;
             server_name localhost;
@@ -98,14 +105,17 @@ jobs:
             add_header X-Content-Type-Options "nosniff";
 
             location / {
-                try_files \$uri \$uri/ /index.php?\$args;
+                try_files $uri $uri/ /index.php$is_args$args;
             }
 
             location ~ \.php$ {
+                include fastcgi_params;
+                fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
                 fastcgi_pass unix:/tmp/php-fpm.sock;
                 fastcgi_index index.php;
-                fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
-                include fastcgi_params;
+                fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+                fastcgi_buffers 16 16k;
+                fastcgi_buffer_size 32k;
             }
 
             location ~ /\.(ht|svn|git) {
@@ -114,12 +124,20 @@ jobs:
         }
         EOL
 
+        # Asegurar que los directorios importantes tienen permisos correctos
+        echo "Configurando permisos..."
+        chown -R www-data:www-data /home/site/wwwroot/web/assets
+        chown -R www-data:www-data /home/site/wwwroot/runtime
+        chmod -R 777 /home/site/wwwroot/web/assets
+        chmod -R 777 /home/site/wwwroot/runtime
+        chmod -R 755 /home/site/wwwroot/web
+
         # 3. Iniciar servicios
         echo "Iniciando PHP-FPM..."
-        php-fpm -D
+        php-fpm
 
         echo "Iniciando Nginx..."
-        exec nginx -g "daemon off;"
+        nginx -g "daemon off;"
         EOF
 
         chmod +x startup.sh
@@ -140,8 +158,9 @@ jobs:
             --name ${{ env.AZURE_WEBAPP_NAME }} \
             --resource-group ${{ env.RESOURCE_GROUP }} \
             --linux-fx-version "PHP|${{ env.PHP_VERSION }}" \
-            --startup-file "startup.sh"
+            --startup-file "/home/site/wwwroot/startup.sh"
 
+          # Deshabilitar cualquier servicio predeterminado que pueda estar ocupando el puerto
           az webapp config appsettings set \
             --name ${{ env.AZURE_WEBAPP_NAME }} \
             --resource-group ${{ env.RESOURCE_GROUP }} \
@@ -152,7 +171,8 @@ jobs:
               PHP_FPM_START_SERVERS=2 \
               PHP_FPM_MIN_SPARE_SERVERS=1 \
               PHP_FPM_MAX_SPARE_SERVERS=3 \
-              YII_ENV=prod
+              YII_ENV=prod \
+              SCM_DO_BUILD_DURING_DEPLOYMENT=true
 
     - name: Deploy to Azure
       uses: azure/webapps-deploy@v2
