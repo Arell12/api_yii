@@ -21,7 +21,7 @@ jobs:
       uses: shivammathur/setup-php@v2
       with:
         php-version: ${{ env.PHP_VERSION }}
-        extensions: intl, gd, pdo_mysql, zip
+        extensions: intl, gd, pdo_mysql, zip, mbstring, curl, json, fileinfo
         tools: composer
 
     - name: Install dependencies
@@ -34,6 +34,12 @@ jobs:
         # Configuración de producción en index.php
         cat << 'EOF' > web/index.php
         <?php
+        // Habilitar manejo de errores más detallado para diagnosticar problemas
+        ini_set('display_errors', 0);
+        ini_set('log_errors', 1);
+        error_reporting(E_ALL);
+        ini_set('error_log', '/tmp/yii2-runtime/php-error.log');
+
         defined('YII_DEBUG') or define('YII_DEBUG', false);
         defined('YII_ENV') or define('YII_ENV', 'prod');
         
@@ -67,37 +73,92 @@ jobs:
             }
         }
         
-        (new yii\web\Application($config))->run();
-        EOF
+        // Agregar un nuevo target de log para diagnosticar problemas de inicialización
+        $config['components']['log']['targets'][] = [
+            'class' => 'yii\log\FileTarget',
+            'levels' => ['error', 'warning', 'info'],
+            'logFile' => '/tmp/yii2-runtime/app-init.log',
+            'logVars' => [],
+        ];
 
+        // Aumentar timeouts para solicitudes
+        if (!isset($config['components']['request'])) {
+            $config['components']['request'] = [];
+        }
+        $config['components']['request']['enableCsrfValidation'] = false;
+        
+        try {
+            (new yii\web\Application($config))->run();
+        } catch (\Exception $e) {
+            // Log cualquier excepción durante el inicio de la aplicación
+            file_put_contents('/tmp/yii2-runtime/startup-error.log', date('Y-m-d H:i:s') . ' ' . $e->getMessage() . "\n" . $e->getTraceAsString() . "\n", FILE_APPEND);
+            header("HTTP/1.1 500 Internal Server Error");
+            echo "Application error. Please check logs for details.";
+            exit(1);
+        }
+        EOF
+        
         # Asegurar que las configuraciones sean compatibles con un sistema de archivos de sólo lectura
-        # (usaremos /tmp para los directorios que necesitan escritura)
         mkdir -p web/assets runtime
+
+    # Crear un script de health check para depuración
+    - name: Create health check script 
+      run: |
+        cat << 'EOF' > web/health.php
+        <?php
+        echo "Health check OK - " . date('Y-m-d H:i:s');
+        // Información sobre PHP
+        echo "<br>PHP version: " . phpversion();
+        echo "<br>Server software: " . $_SERVER['SERVER_SOFTWARE'];
+        // Verificar directorios temporales
+        echo "<br>TMP dirs:";
+        foreach (['/tmp/yii2-assets', '/tmp/yii2-runtime'] as $dir) {
+            echo "<br>$dir - " . (is_dir($dir) && is_writable($dir) ? "OK (Writable)" : "NOT OK (Not writable)");
+        }
+        EOF
 
     # Modificar el startup script para trabajar con sistema de archivos de solo lectura
     - name: Create optimized startup script
       run: |
         cat << 'EOF' > startup.sh
         #!/bin/bash
-
         # =============================================
         # CONFIGURACIÓN OPTIMIZADA PARA AZURE
         # =============================================
+        
+        # Log para depuración
+        STARTUP_LOG="/tmp/yii2-startup.log"
+        exec > >(tee -a "$STARTUP_LOG") 2>&1
+        echo "==== Inicio de script de arranque: $(date) ===="
+        echo "Entorno actual: $(env | sort)"
 
         # Detener cualquier servicio existente
         echo "Deteniendo servicios existentes..."
         pkill -f nginx || true
         pkill -f php-fpm || true
-
+        
         # Crear directorios temporales con permisos de escritura
         echo "Creando directorios temporales para Yii2..."
         mkdir -p /tmp/yii2-assets
         mkdir -p /tmp/yii2-runtime
         chmod -R 777 /tmp/yii2-assets
+        chmod -p /tmp/yii2-logs
+        chmod -R 777 /tmp/yii2-logs
         chmod -R 777 /tmp/yii2-runtime
-
-        # 1. Configurar PHP-FPM
+        
+        # 1. Configurar PHP-FPM optimizado para rendimiento
         echo "Configurando PHP-FPM..."
+        cat > /usr/local/etc/php/php.ini << 'EOL'
+        memory_limit = 256M
+        max_execution_time = 300
+        upload_max_filesize = 32M
+        post_max_size = 32M
+        display_errors = Off
+        log_errors = On
+        error_log = /tmp/yii2-logs/php_errors.log
+        default_socket_timeout = 300
+        EOL
+        
         cat > /usr/local/etc/php-fpm.d/zz-azure.conf << 'EOL'
         [www]
         user = www-data
@@ -107,45 +168,64 @@ jobs:
         listen.group = www-data
         listen.mode = 0660
         pm = dynamic
-        pm.max_children = 10
-        pm.start_servers = 2
-        pm.min_spare_servers = 1
-        pm.max_spare_servers = 3
+        pm.max_children = 30
+        pm.start_servers = 5
+        pm.min_spare_servers = 2
+        pm.max_spare_servers = 5
+        pm.max_requests = 500
         request_terminate_timeout = 300
         EOL
-
-        # 2. Configurar Nginx correctamente para Yii2
+        
+        # 2. Configurar Nginx correctamente para Yii2 con menos restricciones
         echo "Configurando Nginx..."
         cat > /etc/nginx/sites-available/default << 'EOL'
         server {
-            listen 8080;
-            server_name localhost;
+            listen 8080 default_server;
+            server_name _;
+            
             root /home/site/wwwroot/web;
             index index.php;
-            client_max_body_size 32m;
+            
+            # Logs - usar directorio con permisos de escritura
+            access_log /tmp/yii2-logs/nginx-access.log;
+            error_log /tmp/yii2-logs/nginx-error.log;
             
             # Aumentar timeouts
+            client_max_body_size 32m;
+            client_body_timeout 300s;
+            client_header_timeout 300s;
+            keepalive_timeout 300s;
+            send_timeout 300s;
+            
             proxy_connect_timeout 300s;
             proxy_send_timeout 300s;
             proxy_read_timeout 300s;
             fastcgi_send_timeout 300s;
             fastcgi_read_timeout 300s;
-
+            
             # Configuración de seguridad
             add_header X-Frame-Options "SAMEORIGIN";
             add_header X-XSS-Protection "1; mode=block";
             add_header X-Content-Type-Options "nosniff";
-
+            
+            # Health check
+            location = /health.php {
+                include fastcgi_params;
+                fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+                fastcgi_pass unix:/tmp/php-fpm.sock;
+                fastcgi_read_timeout 10;
+            }
+            
             # Ruta para los assets en directorio temporal
             location /assets {
                 alias /tmp/yii2-assets;
                 try_files $uri =404;
             }
-
+            
             location / {
                 try_files $uri $uri/ /index.php$is_args$args;
             }
-
+            
             location ~ \.php$ {
                 include fastcgi_params;
                 fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
@@ -154,22 +234,37 @@ jobs:
                 fastcgi_buffers 16 16k;
                 fastcgi_buffer_size 32k;
                 fastcgi_read_timeout 300;
+                fastcgi_intercept_errors on;
             }
-
+            
             location ~ /\.(ht|svn|git) {
                 deny all;
             }
         }
         EOL
-
-        # 3. Iniciar servicios
+        
+        # 3. Solucionador de permiso para directorios de escritura
+        echo "Asegurando permisos para los directorios..."
+        find /tmp/yii2-* -type d -exec chmod 777 {} \;
+        
+        # 4. Iniciar servicios
         echo "Iniciando PHP-FPM..."
-        php-fpm
-
+        mkdir -p /run/php  # Asegurar que el directorio exist
+        php-fpm -D
+        
+        # Verificar que PHP-FPM está funcionando
+        if [ -S "/tmp/php-fpm.sock" ]; then
+            echo "PHP-FPM iniciado correctamente y socket creado."
+        else
+            echo "ERROR: PHP-FPM no inició correctamente o el socket no fue creado."
+            # Mostrar logs para diagnóstico
+            tail -30 /usr/local/var/log/php-fpm.log
+        fi
+        
         echo "Iniciando Nginx..."
+        nginx -t  # Verificar la configuración antes de iniciar
         nginx -g "daemon off;"
         EOF
-
         chmod +x startup.sh
 
     - name: Zip artifact
@@ -184,40 +279,67 @@ jobs:
       uses: azure/cli@v1
       with:
         inlineScript: |
-          # Configurar la aplicación web
+          # Configurar la aplicación web con timeouts más largos y configuraciones optimizadas
           az webapp config set \
             --name ${{ env.AZURE_WEBAPP_NAME }} \
             --resource-group ${{ env.RESOURCE_GROUP }} \
             --linux-fx-version "PHP|${{ env.PHP_VERSION }}" \
-            --startup-file "/home/site/wwwroot/startup.sh"
+            --startup-file "/home/site/wwwroot/startup.sh" \
+            --generic-configurations '{"requestTracingEnabled": true}'
             
-          # Habilitar logs y configuraciones adicionales
+          # Habilitar logs detallados
           az webapp log config \
             --name ${{ env.AZURE_WEBAPP_NAME }} \
             --resource-group ${{ env.RESOURCE_GROUP }} \
             --web-server-logging filesystem \
+            --docker-container-logging filesystem \
             --detailed-error-messages true \
             --failed-request-tracing true
-
-          # Deshabilitar cualquier servicio predeterminado que pueda estar ocupando el puerto
+          
+          # Configuración optimizada para Yii2 en Azure
           az webapp config appsettings set \
             --name ${{ env.AZURE_WEBAPP_NAME }} \
             --resource-group ${{ env.RESOURCE_GROUP }} \
             --settings \
               WEBSITES_ENABLE_APP_SERVICE_STORAGE=true \
               WEBSITES_PORT=8080 \
-              PHP_FPM_MAX_CHILDREN=10 \
-              PHP_FPM_START_SERVERS=2 \
-              PHP_FPM_MIN_SPARE_SERVERS=1 \
-              PHP_FPM_MAX_SPARE_SERVERS=3 \
+              PHP_INI_SCAN_DIR=/usr/local/etc/php/conf.d:/home/site/ini \
               YII_ENV=prod \
               SCM_DO_BUILD_DURING_DEPLOYMENT=true \
+              PHP_FPM_MAX_CHILDREN=30 \
+              PHP_FPM_START_SERVERS=5 \
+              PHP_FPM_MIN_SPARE_SERVERS=2 \
+              PHP_FPM_MAX_SPARE_SERVERS=5 \
               WEBSITES_CONTAINER_START_TIME_LIMIT=600 \
               SCM_COMMAND_IDLE_TIMEOUT=600 \
               WEBSITE_HTTPLOGGING_RETENTION_DAYS=1
+          
+          # Aumentar el tiempo de espera del servicio web
+          az webapp update \
+            --name ${{ env.AZURE_WEBAPP_NAME }} \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --set httpsOnly=true
+            
+          # Reiniciar la aplicación para asegurar que tome las nuevas configuraciones
+          az webapp restart \
+            --name ${{ env.AZURE_WEBAPP_NAME }} \
+            --resource-group ${{ env.RESOURCE_GROUP }}
 
     - name: Deploy to Azure
       uses: azure/webapps-deploy@v2
       with:
         app-name: ${{ env.AZURE_WEBAPP_NAME }}
         package: release.zip
+        
+    - name: Verify Deployment
+      uses: azure/cli@v1
+      with:
+        inlineScript: |
+          echo "Esperando 30 segundos para que la aplicación se inicie..."
+          sleep 30
+          
+          # Generar un reporte de salud de la aplicación
+          echo "Comprobando estado de la aplicación..."
+          az webapp log tail \
+            --name ${{ env.AZURE_WEBAPP_NAME }} \
+            --resource-group ${{ env.RESOURCE_GROUP }}
