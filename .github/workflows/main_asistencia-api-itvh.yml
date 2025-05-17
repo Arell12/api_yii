@@ -40,25 +40,41 @@ jobs:
         require __DIR__ . '/../vendor/autoload.php';
         require __DIR__ . '/../vendor/yiisoft/yii2/Yii.php';
         
+        // Configurar directorios de assets y runtime en ubicación con permisos de escritura
+        Yii::setAlias('@runtime', '/tmp/yii2-runtime');
+        Yii::setAlias('@webroot', __DIR__);
+        Yii::setAlias('@web', '');
+        
         $config = require __DIR__ . '/../config/web.php';
+        
+        // Modificar configuración para usar directorios temporales con permisos de escritura
+        if (!isset($config['components']['assetManager'])) {
+            $config['components']['assetManager'] = [];
+        }
+        $config['components']['assetManager']['basePath'] = '/tmp/yii2-assets';
+        $config['components']['assetManager']['baseUrl'] = '/assets';
+        
+        // Asegurar que el directorio runtime esté configurado para usar /tmp
+        if (!isset($config['components']['log'])) {
+            $config['components']['log'] = [];
+        }
+        if (!isset($config['components']['log']['targets'])) {
+            $config['components']['log']['targets'] = [];
+        }
+        foreach ($config['components']['log']['targets'] as &$target) {
+            if (isset($target['logFile'])) {
+                $target['logFile'] = str_replace('@runtime', '/tmp/yii2-runtime', $target['logFile']);
+            }
+        }
         
         (new yii\web\Application($config))->run();
         EOF
 
-        # Configuración de assetManager
-        sed -i "/'components' => \[/a \
-        'assetManager' => [\n\
-            'basePath' => '@webroot/assets',\n\
-            'baseUrl' => '@web/assets',\n\
-        ]," config/web.php
-
-        # Crear directorios necesarios y establecer permisos
+        # Asegurar que las configuraciones sean compatibles con un sistema de archivos de sólo lectura
+        # (usaremos /tmp para los directorios que necesitan escritura)
         mkdir -p web/assets runtime
-        chmod -R 777 web/assets
-        chmod -R 777 runtime
-        chmod -R 777 web
 
-    # Modificar el startup script para evitar conflictos de puertos
+    # Modificar el startup script para trabajar con sistema de archivos de solo lectura
     - name: Create optimized startup script
       run: |
         cat << 'EOF' > startup.sh
@@ -72,6 +88,13 @@ jobs:
         echo "Deteniendo servicios existentes..."
         pkill -f nginx || true
         pkill -f php-fpm || true
+
+        # Crear directorios temporales con permisos de escritura
+        echo "Creando directorios temporales para Yii2..."
+        mkdir -p /tmp/yii2-assets
+        mkdir -p /tmp/yii2-runtime
+        chmod -R 777 /tmp/yii2-assets
+        chmod -R 777 /tmp/yii2-runtime
 
         # 1. Configurar PHP-FPM
         echo "Configurando PHP-FPM..."
@@ -88,6 +111,7 @@ jobs:
         pm.start_servers = 2
         pm.min_spare_servers = 1
         pm.max_spare_servers = 3
+        request_terminate_timeout = 300
         EOL
 
         # 2. Configurar Nginx correctamente para Yii2
@@ -98,11 +122,25 @@ jobs:
             server_name localhost;
             root /home/site/wwwroot/web;
             index index.php;
+            client_max_body_size 32m;
+            
+            # Aumentar timeouts
+            proxy_connect_timeout 300s;
+            proxy_send_timeout 300s;
+            proxy_read_timeout 300s;
+            fastcgi_send_timeout 300s;
+            fastcgi_read_timeout 300s;
 
             # Configuración de seguridad
             add_header X-Frame-Options "SAMEORIGIN";
             add_header X-XSS-Protection "1; mode=block";
             add_header X-Content-Type-Options "nosniff";
+
+            # Ruta para los assets en directorio temporal
+            location /assets {
+                alias /tmp/yii2-assets;
+                try_files $uri =404;
+            }
 
             location / {
                 try_files $uri $uri/ /index.php$is_args$args;
@@ -113,9 +151,9 @@ jobs:
                 fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
                 fastcgi_pass unix:/tmp/php-fpm.sock;
                 fastcgi_index index.php;
-                fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
                 fastcgi_buffers 16 16k;
                 fastcgi_buffer_size 32k;
+                fastcgi_read_timeout 300;
             }
 
             location ~ /\.(ht|svn|git) {
@@ -123,14 +161,6 @@ jobs:
             }
         }
         EOL
-
-        # Asegurar que los directorios importantes tienen permisos correctos
-        echo "Configurando permisos..."
-        chown -R www-data:www-data /home/site/wwwroot/web/assets
-        chown -R www-data:www-data /home/site/wwwroot/runtime
-        chmod -R 777 /home/site/wwwroot/web/assets
-        chmod -R 777 /home/site/wwwroot/runtime
-        chmod -R 755 /home/site/wwwroot/web
 
         # 3. Iniciar servicios
         echo "Iniciando PHP-FPM..."
@@ -154,11 +184,15 @@ jobs:
       uses: azure/cli@v1
       with:
         inlineScript: |
+          # Configurar Azure App Service para tiempos de espera más largos
           az webapp config set \
             --name ${{ env.AZURE_WEBAPP_NAME }} \
             --resource-group ${{ env.RESOURCE_GROUP }} \
             --linux-fx-version "PHP|${{ env.PHP_VERSION }}" \
-            --startup-file "/home/site/wwwroot/startup.sh"
+            --startup-file "/home/site/wwwroot/startup.sh" \
+            --http-logging-enabled true \
+            --detailed-error-messages true \
+            --failed-request-tracing true
 
           # Deshabilitar cualquier servicio predeterminado que pueda estar ocupando el puerto
           az webapp config appsettings set \
@@ -172,7 +206,10 @@ jobs:
               PHP_FPM_MIN_SPARE_SERVERS=1 \
               PHP_FPM_MAX_SPARE_SERVERS=3 \
               YII_ENV=prod \
-              SCM_DO_BUILD_DURING_DEPLOYMENT=true
+              SCM_DO_BUILD_DURING_DEPLOYMENT=true \
+              WEBSITES_CONTAINER_START_TIME_LIMIT=600 \
+              SCM_COMMAND_IDLE_TIMEOUT=600 \
+              WEBSITE_HTTPLOGGING_RETENTION_DAYS=1
 
     - name: Deploy to Azure
       uses: azure/webapps-deploy@v2
