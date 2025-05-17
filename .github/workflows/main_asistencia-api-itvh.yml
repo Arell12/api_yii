@@ -1,218 +1,179 @@
-# Docs for the Azure Web Apps Deploy action: https://github.com/Azure/webapps-deploy
-name: Build and deploy PHP app to Azure Web App - asistencia-api-itvh
+name: Build and deploy Yii2 to Azure App Service
 
 on:
   push:
-    branches:
-      - main
+    branches: [ main ]
   workflow_dispatch:
 
+env:
+  AZURE_WEBAPP_NAME: asistencia-api-itvh
+  AZURE_WEBAPP_PACKAGE_PATH: '.'
+  PHP_VERSION: '8.2'
+
 jobs:
-  build:
+  build-and-deploy:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup PHP
-        uses: shivammathur/setup-php@v2
-        with:
-          php-version: '8.2'
-          extensions: intl, gd, zip, pdo_mysql
-          
-      - name: Check composer.json
-        id: check_files
-        run: |
-          if [ -f "composer.json" ]; then
-            echo "exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "exists=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Run composer install
-        if: steps.check_files.outputs.exists == 'true'
-        run: |
-          composer validate --no-check-publish
-          composer install --prefer-dist --no-progress --no-dev --optimize-autoloader
-
-      - name: Generate Yii2 cookie validation key
-        run: |
-          if [ -f "config/web.php" ]; then
-            php -r "
-              \$config = file_get_contents('config/web.php');
-              if (strpos(\$config, \"'cookieValidationKey' => ''\") !== false) {
-                \$config = str_replace(\"'cookieValidationKey' => ''\", \"'cookieValidationKey' => '\".bin2hex(random_bytes(32)).\"'\", \$config);
-                file_put_contents('config/web.php', \$config);
-              }
-            "
-          fi
-
-      - name: Set correct permissions
-        run: |
-          mkdir -p runtime web/assets
-          chmod -R 777 runtime web/assets
-
-      - name: Create Azure storage directories structure
-        run: |
-          mkdir -p storage/{runtime,assets}
-          chmod -R 777 storage
-
-      - name: Simplify index.php
-        run: |
-          cat << 'EOF' > web/index.php
-          <?php
-          // comment out the following two lines when deployed to production
-          defined('YII_DEBUG') or define('YII_DEBUG', true);
-          defined('YII_ENV') or define('YII_ENV', 'dev');
-
-          // Configuración de almacenamiento para Azure
-          $storagePath = '/home/storage';
-          if (!file_exists("$storagePath/runtime")) {
-              mkdir("$storagePath/runtime", 0777, true);
-          }
-          if (!file_exists("$storagePath/assets")) {
-              mkdir("$storagePath/assets", 0777, true);
-          }
-
-          require __DIR__ . '/../vendor/autoload.php';
-          require __DIR__ . '/../vendor/yiisoft/yii2/Yii.php';
-
-          $config = require __DIR__ . '/../config/web.php';
-
-          // Configurar alias para Azure
-          Yii::setAlias('@runtime', "$storagePath/runtime");
-          Yii::setAlias('@webroot/assets', "$storagePath/assets");
-
-          (new yii\web\Application($config))->run();
-          EOF
-
-      - name: Create enhanced startup script
-        run: |
-          cat << 'EOF' > startup.sh
-          #!/bin/bash
-
-          # Configurar PHP-FPM
-          echo "Configurando PHP-FPM..."
-          cat << 'EOL' > /usr/local/etc/php-fpm.d/www.conf
-          [www]
-          listen = /tmp/php-fpm.sock
-          listen.owner = www-data
-          listen.group = www-data
-          listen.mode = 0660
-          user = www-data
-          group = www-data
-          pm = dynamic
-          pm.max_children = 10
-          pm.start_servers = 2
-          pm.min_spare_servers = 1
-          pm.max_spare_servers = 3
-          EOL
-
-          # Crear directorios de almacenamiento persistente
-          echo "Creando directorios..."
-          mkdir -p /home/storage/{runtime,assets}
-          chmod -R 777 /home/storage /home/site/wwwroot/runtime /home/site/wwwroot/web/assets
-
-          # Configurar Nginx
-          echo "Configurando Nginx..."
-          cat << 'EOL' > /etc/nginx/conf.d/default.conf
-          server {
-              listen 8080;
-              server_name localhost;
-              root /home/site/wwwroot/web;
-              index index.php;
-
-              location / {
-                  try_files \$uri \$uri/ /index.php?\$args;
-              }
-
-              location ~ \.php$ {
-                  fastcgi_pass unix:/tmp/php-fpm.sock;
-                  fastcgi_index index.php;
-                  include fastcgi_params;
-                  fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
-              }
-
-              location ~ /\.(ht|svn|git) {
-                  deny all;
-              }
-          }
-          EOL
-
-          # Iniciar servicios en el orden correcto
-          echo "Iniciando PHP-FPM..."
-          php-fpm -D
-
-          echo "Iniciando Nginx..."
-          exec nginx -g 'daemon off;'
-          EOF
-          
-          chmod +x startup.sh
-
-      - name: Zip artifact for deployment
-        run: zip -r release.zip . -x '*.git*'
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: php-app
-          path: release.zip
-
-  deploy:
-    runs-on: ubuntu-latest
-    needs: build
-    environment:
-      name: 'Production'
-      url: ${{ steps.deploy-to-webapp.outputs.webapp-url }}
-    permissions:
-      id-token: write
-      contents: read
-
-    steps:
-      - name: Download artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: php-app
-
-      - name: Unzip artifact
-        run: unzip release.zip
-
-      - name: Login to Azure
-        uses: azure/login@v2
-        with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
-          auth-type: "SERVICE_PRINCIPAL"
+    environment: production
     
-      - name: Configure Azure App Service settings
-        uses: azure/cli@v2
-        with:
-          inlineScript: |
-            # Configurar la versión de PHP y ajustes importantes
-            az webapp config set \
-              --name asistencia-api-itvh \
-              --resource-group asistencia-app \
-              --linux-fx-version "PHP|8.2" \
-              --startup-file "startup.sh"
-            
-            # Configurar ajustes específicos para Yii2
-            az webapp config appsettings set \
-              --name asistencia-api-itvh \
-              --resource-group asistencia-app \
-              --settings \
-                WEBSITES_ENABLE_APP_SERVICE_STORAGE=true \
-                WEBSITES_PORT=8080 \
-                PHP_FPM_MAX_CHILDREN=10 \
-                PHP_FPM_START_SERVERS=2 \
-                PHP_FPM_MIN_SPARE_SERVERS=1 \
-                PHP_FPM_MAX_SPARE_SERVERS=3 \
-                YII_ENV=prod
-            
-      - name: Deploy to Azure Web App
-        uses: azure/webapps-deploy@v3
-        id: deploy-to-webapp
-        with:
-          app-name: 'asistencia-api-itvh'
-          slot-name: 'Production'
-          package: .
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup PHP
+      uses: shivammathur/setup-php@v2
+      with:
+        php-version: ${{ env.PHP_VERSION }}
+        extensions: intl, gd, zip, pdo_mysql
+        tools: composer
+
+    - name: Install dependencies
+      run: |
+        composer install --prefer-dist --no-progress --no-dev --optimize-autoloader
+        composer dump-autoload --optimize
+
+    - name: Setup Yii2 for Azure
+      run: |
+        # Crear directorios necesarios
+        mkdir -p runtime web/assets
+        chmod -R 777 runtime web/assets
+
+        # Configuración optimizada de index.php
+        cat << 'EOF' > web/index.php
+        <?php
+        defined('YII_DEBUG') or define('YII_DEBUG', false);
+        defined('YII_ENV') or define('YII_ENV', 'prod');
+
+        // Configuración específica para Azure
+        $storagePath = '/home/site/wwwroot';
+
+        require __DIR__ . '/../vendor/autoload.php';
+        require __DIR__ . '/../vendor/yiisoft/yii2/Yii.php';
+
+        $config = require __DIR__ . '/../config/web.php';
+
+        (new yii\web\Application($config))->run();
+        EOF
+
+        # Actualizar web.php con configuración para Azure
+        sed -i "/'components' => \[/a \
+        'assetManager' => [\n\
+            'basePath' => '/home/site/wwwroot/web/assets',\n\
+            'baseUrl' => '@web/assets',\n\
+            'hashCallback' => function (\$path) {\n\
+                return hash('md4', \$path);\n\
+            },\n\
+            'appendTimestamp' => true,\n\
+        ]," config/web.php
+
+    - name: Create Azure startup script
+      run: |
+        cat << 'EOF' > startup.sh
+        #!/bin/bash
+
+        # =============================================
+        # CONFIGURACIÓN INICIAL PARA AZURE APP SERVICE
+        # =============================================
+
+        # 1. Configurar PHP-FPM para usar sockets Unix
+        echo "Configurando PHP-FPM..."
+        cat > /usr/local/etc/php-fpm.d/zz-azure.conf << 'EOL'
+        [www]
+        user = www-data
+        group = www-data
+        listen = /tmp/php-fpm.sock
+        listen.owner = www-data
+        listen.group = www-data
+        listen.mode = 0660
+        pm = dynamic
+        pm.max_children = 10
+        pm.start_servers = 2
+        pm.min_spare_servers = 1
+        pm.max_spare_servers = 3
+        EOL
+
+        # 2. Configurar Nginx para Yii2
+        echo "Configurando Nginx..."
+        cat > /etc/nginx/conf.d/default.conf << 'EOL'
+        server {
+            listen 8080;
+            server_name localhost;
+            root /home/site/wwwroot/web;
+            index index.php;
+
+            # Configuración de seguridad
+            add_header X-Frame-Options "SAMEORIGIN";
+            add_header X-XSS-Protection "1; mode=block";
+            add_header X-Content-Type-Options "nosniff";
+
+            location / {
+                try_files \$uri \$uri/ /index.php?\$args;
+            }
+
+            location ~ \.php$ {
+                fastcgi_pass unix:/tmp/php-fpm.sock;
+                fastcgi_index index.php;
+                fastcgi_param SCRIPT_FILENAME \$realpath_root\$fastcgi_script_name;
+                include fastcgi_params;
+            }
+
+            location ~ /\.(?!well-known).* {
+                deny all;
+            }
+
+            location ~ ^/(protected|framework|themes/\w+/views) {
+                deny all;
+            }
+        }
+        EOL
+
+        # 3. Asegurar permisos
+        echo "Configurando permisos..."
+        mkdir -p /home/site/wwwroot/web/assets
+        chmod -R 777 /home/site/wwwroot/runtime
+        chmod -R 777 /home/site/wwwroot/web/assets
+
+        # 4. Iniciar servicios
+        echo "Iniciando PHP-FPM..."
+        php-fpm -D
+
+        echo "Iniciando Nginx..."
+        exec nginx -g "daemon off;"
+        EOF
+
+        chmod +x startup.sh
+
+    - name: Zip artifact
+      run: zip -r release.zip . -x '*.git*'
+
+    - name: Login to Azure
+      uses: azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+    - name: Configure Azure App Service
+      uses: azure/cli@v1
+      with:
+        inlineScript: |
+          az webapp config set \
+            --name ${{ env.AZURE_WEBAPP_NAME }} \
+            --resource-group asistencia-app \
+            --linux-fx-version "PHP|${{ env.PHP_VERSION }}" \
+            --startup-file "startup.sh"
+
+          az webapp config appsettings set \
+            --name ${{ env.AZURE_WEBAPP_NAME }} \
+            --resource-group asistencia-app \
+            --settings \
+              WEBSITES_ENABLE_APP_SERVICE_STORAGE=true \
+              WEBSITES_PORT=8080 \
+              PHP_FPM_MAX_CHILDREN=10 \
+              PHP_FPM_START_SERVERS=2 \
+              PHP_FPM_MIN_SPARE_SERVERS=1 \
+              PHP_FPM_MAX_SPARE_SERVERS=3 \
+              YII_ENV=prod
+
+    - name: Deploy to Azure
+      uses: azure/webapps-deploy@v2
+      with:
+        app-name: ${{ env.AZURE_WEBAPP_NAME }}
+        package: release.zip
