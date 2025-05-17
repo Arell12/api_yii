@@ -1,5 +1,4 @@
 # Docs for the Azure Web Apps Deploy action: https://github.com/Azure/webapps-deploy
-# More GitHub Actions for Azure: https://github.com/Azure/actions
 name: Build and deploy PHP app to Azure Web App - asistencia-api-itvh
 
 on:
@@ -50,44 +49,75 @@ jobs:
             "
           fi
 
-      - name: Create Azure Storage Compatibility Script
+      - name: Set correct permissions
         run: |
-          cat << EOF > config/azure-storage.php
+          mkdir -p runtime web/assets
+          chmod -R 777 runtime web/assets
+
+      - name: Create Azure storage directories structure
+        run: |
+          mkdir -p storage/{runtime,assets}
+          chmod -R 777 storage
+
+      - name: Simplify index.php
+        run: |
+          cat << 'EOF' > web/index.php
           <?php
-          // Azure App Service compatible storage path configuration
-          defined('STORAGE_DIR') or define('STORAGE_DIR', '/home/storage');
-          
-          // Define global variables for asset manager
-          \$GLOBALS['yii2AzureStorage'] = [
-              'runtimePath' => STORAGE_DIR . '/runtime',
-              'assetsPath' => STORAGE_DIR . '/assets',
-          ];
-          
-          // Define path alias for storage
-          Yii::\$container->set('path', [
-              '@runtime' => STORAGE_DIR . '/runtime',
-              '@webroot/assets' => STORAGE_DIR . '/assets',
-          ]);
-          
-          // Create directories if they don't exist
-          if (!file_exists(STORAGE_DIR . '/runtime')) {
-              @mkdir(STORAGE_DIR . '/runtime', 0777, true);
+          // comment out the following two lines when deployed to production
+          defined('YII_DEBUG') or define('YII_DEBUG', true);
+          defined('YII_ENV') or define('YII_ENV', 'dev');
+
+          // Configuración de almacenamiento para Azure
+          $storagePath = '/home/storage';
+          if (!file_exists("$storagePath/runtime")) {
+              mkdir("$storagePath/runtime", 0777, true);
           }
-          if (!file_exists(STORAGE_DIR . '/assets')) {
-              @mkdir(STORAGE_DIR . '/assets', 0777, true);
+          if (!file_exists("$storagePath/assets")) {
+              mkdir("$storagePath/assets", 0777, true);
           }
+
+          require __DIR__ . '/../vendor/autoload.php';
+          require __DIR__ . '/../vendor/yiisoft/yii2/Yii.php';
+
+          $config = require __DIR__ . '/../config/web.php';
+
+          // Configurar alias para Azure
+          Yii::setAlias('@runtime', "$storagePath/runtime");
+          Yii::setAlias('@webroot/assets', "$storagePath/assets");
+
+          (new yii\web\Application($config))->run();
           EOF
 
-      - name: Update index.php for Azure compatibility
+      - name: Create enhanced startup script
         run: |
-          if [ -f "web/index.php" ]; then
-            sed -i '/require __DIR__/i // Azure storage configuration\nrequire __DIR__ . "/../config/azure-storage.php";' web/index.php
-          fi
+          cat << 'EOF' > startup.sh
+          #!/bin/bash
 
-      - name: Configure Nginx for Yii2
-        run: |
-          mkdir -p .nginx/conf.d
-          cat << EOF > .nginx/conf.d/default.conf
+          # Configurar PHP-FPM
+          echo "Configurando PHP-FPM..."
+          cat << 'EOL' > /usr/local/etc/php-fpm.d/www.conf
+          [www]
+          listen = /tmp/php-fpm.sock
+          listen.owner = www-data
+          listen.group = www-data
+          listen.mode = 0660
+          user = www-data
+          group = www-data
+          pm = dynamic
+          pm.max_children = 10
+          pm.start_servers = 2
+          pm.min_spare_servers = 1
+          pm.max_spare_servers = 3
+          EOL
+
+          # Crear directorios de almacenamiento persistente
+          echo "Creando directorios..."
+          mkdir -p /home/storage/{runtime,assets}
+          chmod -R 777 /home/storage /home/site/wwwroot/runtime /home/site/wwwroot/web/assets
+
+          # Configurar Nginx
+          echo "Configurando Nginx..."
+          cat << 'EOL' > /etc/nginx/conf.d/default.conf
           server {
               listen 8080;
               server_name localhost;
@@ -99,64 +129,30 @@ jobs:
               }
 
               location ~ \.php$ {
-                  fastcgi_pass 127.0.0.1:9000;
+                  fastcgi_pass unix:/tmp/php-fpm.sock;
                   fastcgi_index index.php;
                   include fastcgi_params;
                   fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
               }
 
-              location ~ /\.ht {
+              location ~ /\.(ht|svn|git) {
                   deny all;
               }
           }
-          EOF
+          EOL
 
-      - name: Create enhanced startup script
-        run: |
-          cat << EOF > startup.sh
-          #!/bin/bash
-          # Script de inicio para Azure App Service
-          # Este script se ejecuta cada vez que se inicia la aplicación
-          echo "Iniciando script de configuración para Yii2 en Azure App Service..."
-
-          # Crear directorios de almacenamiento persistente
-          echo "Creando directorios de almacenamiento persistente..."
-          mkdir -p /home/storage/runtime /home/storage/assets
-          chmod -R 777 /home/storage/runtime /home/storage/assets
-
-          # Verificar si existen los directorios
-          if [ -d "/home/storage/runtime" ] && [ -d "/home/storage/assets" ]; then
-            echo "Directorios de almacenamiento creados correctamente."
-          else
-            echo "ERROR: No se pudieron crear los directorios de almacenamiento."
-          fi
-
-          # Aplicar configuración de Nginx si existe
-          if [ -f /home/site/wwwroot/.nginx/conf.d/default.conf ]; then
-            echo "Aplicando configuración de Nginx..."
-            cp /home/site/wwwroot/.nginx/conf.d/default.conf /etc/nginx/conf.d/default.conf
-            service nginx restart
-            if [ \$? -eq 0 ]; then
-              echo "Nginx reiniciado correctamente."
-            else
-              echo "ERROR: No se pudo reiniciar Nginx."
-            fi
-          else
-            echo "ADVERTENCIA: No se encontró el archivo de configuración de Nginx."
-          fi
-
-          # Log para verificar el directorio de la aplicación
-          echo "Contenido del directorio de la aplicación:"
-          ls -la /home/site/wwwroot
-
-          # Iniciar PHP-FPM
+          # Iniciar servicios en el orden correcto
           echo "Iniciando PHP-FPM..."
-          php-fpm
+          php-fpm -D
+
+          echo "Iniciando Nginx..."
+          exec nginx -g 'daemon off;'
           EOF
+          
           chmod +x startup.sh
 
       - name: Zip artifact for deployment
-        run: zip -r release.zip .
+        run: zip -r release.zip . -x '*.git*'
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -193,15 +189,25 @@ jobs:
         uses: azure/cli@v2
         with:
           inlineScript: |
-            # Definir el Resource Group correctamente
-            RESOURCE_GROUP="asistencia-app"
-      
-            # Log para confirmar
-            echo "✅ Resource Group encontrado: $RESOURCE_GROUP"
-      
-            # Configurar el comando de inicio en Azure
-            az webapp config set --name asistencia-api-itvh --resource-group $RESOURCE_GROUP --startup-file /home/site/wwwroot/startup.sh
-
+            # Configurar la versión de PHP y ajustes importantes
+            az webapp config set \
+              --name asistencia-api-itvh \
+              --resource-group asistencia-app \
+              --linux-fx-version "PHP|8.2" \
+              --startup-file "startup.sh"
+            
+            # Configurar ajustes específicos para Yii2
+            az webapp config appsettings set \
+              --name asistencia-api-itvh \
+              --resource-group asistencia-app \
+              --settings \
+                WEBSITES_ENABLE_APP_SERVICE_STORAGE=true \
+                WEBSITES_PORT=8080 \
+                PHP_FPM_MAX_CHILDREN=10 \
+                PHP_FPM_START_SERVERS=2 \
+                PHP_FPM_MIN_SPARE_SERVERS=1 \
+                PHP_FPM_MAX_SPARE_SERVERS=3 \
+                YII_ENV=prod
             
       - name: Deploy to Azure Web App
         uses: azure/webapps-deploy@v3
