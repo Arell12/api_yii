@@ -101,20 +101,63 @@ jobs:
         # Asegurar que las configuraciones sean compatibles con un sistema de archivos de sólo lectura
         mkdir -p web/assets runtime
 
-    # Crear un script de health check para depuración
-    - name: Create health check script 
+    # Crear un script simple de diagnóstico para verificar que PHP básico funciona
+    - name: Create diagnostic script
       run: |
-        cat << 'EOF' > web/health.php
+        # Crear un script PHP simple para verificar la configuración básica
+        cat << 'EOF' > web/phpinfo.php
         <?php
-        echo "Health check OK - " . date('Y-m-d H:i:s');
-        // Información sobre PHP
-        echo "<br>PHP version: " . phpversion();
-        echo "<br>Server software: " . $_SERVER['SERVER_SOFTWARE'];
-        // Verificar directorios temporales
-        echo "<br>TMP dirs:";
-        foreach (['/tmp/yii2-assets', '/tmp/yii2-runtime'] as $dir) {
-            echo "<br>$dir - " . (is_dir($dir) && is_writable($dir) ? "OK (Writable)" : "NOT OK (Not writable)");
+        phpinfo();
+        EOF
+        
+        # Crear un script básico de diagnóstico
+        cat << 'EOF' > web/diagnose.php
+        <?php
+        header("Content-Type: text/plain");
+        echo "=== DIAGNÓSTICO DEL ENTORNO ===\n";
+        echo "Fecha y hora: " . date('Y-m-d H:i:s') . "\n";
+        echo "PHP version: " . phpversion() . "\n";
+        echo "Sistema operativo: " . PHP_OS . "\n";
+        
+        // Verificar extensiones críticas
+        $required_extensions = ['pdo', 'pdo_mysql', 'mbstring', 'fileinfo', 'curl', 'json'];
+        echo "\nEXTENSIONES REQUERIDAS:\n";
+        foreach ($required_extensions as $ext) {
+            echo "- $ext: " . (extension_loaded($ext) ? "CARGADA" : "NO CARGADA") . "\n";
         }
+        
+        // Verificar directorios
+        echo "\nDIRECTORIOS IMPORTANTES:\n";
+        $dirs = [
+            '/tmp/yii2-assets' => 'Assets',
+            '/tmp/yii2-runtime' => 'Runtime',
+            '/tmp/yii2-logs' => 'Logs'
+        ];
+        foreach ($dirs as $path => $desc) {
+            $exists = is_dir($path);
+            $writable = is_writable($path);
+            echo "- $desc ($path): " . ($exists ? "Existe" : "No existe") . ", " . ($writable ? "Escribible" : "No escribible") . "\n";
+        }
+        
+        // Variables de servidor importantes
+        echo "\nVARIABLES DEL SERVIDOR:\n";
+        $important_vars = ['DOCUMENT_ROOT', 'SERVER_NAME', 'SERVER_ADDR', 'SERVER_PORT', 'SCRIPT_FILENAME', 'REMOTE_ADDR'];
+        foreach ($important_vars as $var) {
+            echo "- $var: " . (isset($_SERVER[$var]) ? $_SERVER[$var] : 'No definido') . "\n";
+        }
+        
+        // Intentar escribir en directorios temporales
+        echo "\nPRUEBA DE ESCRITURA:\n";
+        foreach ($dirs as $path => $desc) {
+            $test_file = "$path/test_" . time() . ".txt";
+            $result = @file_put_contents($test_file, "Test " . date('Y-m-d H:i:s'));
+            echo "- Escribir en $desc: " . ($result !== false ? "OK ($result bytes)" : "ERROR") . "\n";
+            if ($result !== false) {
+                @unlink($test_file);
+            }
+        }
+        
+        echo "\n=== FIN DEL DIAGNÓSTICO ===\n";
         EOF
 
     # Modificar el startup script para trabajar con sistema de archivos de solo lectura
@@ -141,8 +184,8 @@ jobs:
         echo "Creando directorios temporales para Yii2..."
         mkdir -p /tmp/yii2-assets
         mkdir -p /tmp/yii2-runtime
+        mkdir -p /tmp/yii2-logs
         chmod -R 777 /tmp/yii2-assets
-        chmod -p /tmp/yii2-logs
         chmod -R 777 /tmp/yii2-logs
         chmod -R 777 /tmp/yii2-runtime
         
@@ -166,7 +209,7 @@ jobs:
         listen = /tmp/php-fpm.sock
         listen.owner = www-data
         listen.group = www-data
-        listen.mode = 0660
+        listen.mode = 0666
         pm = dynamic
         pm.max_children = 30
         pm.start_servers = 5
@@ -249,8 +292,14 @@ jobs:
         
         # 4. Iniciar servicios
         echo "Iniciando PHP-FPM..."
-        mkdir -p /run/php  # Asegurar que el directorio exist
-        php-fpm -D
+        mkdir -p /run/php  # Asegurar que el directorio existe
+        
+        # Asegurarse de que no hay otros procesos php-fpm ejecutándose
+        pkill -9 -f php-fpm || true
+        sleep 2
+        
+        # Iniciar PHP-FPM con configuración explícita
+        php-fpm -D -y /usr/local/etc/php-fpm.d/zz-azure.conf
         
         # Verificar que PHP-FPM está funcionando
         if [ -S "/tmp/php-fpm.sock" ]; then
@@ -258,11 +307,15 @@ jobs:
         else
             echo "ERROR: PHP-FPM no inició correctamente o el socket no fue creado."
             # Mostrar logs para diagnóstico
-            tail -30 /usr/local/var/log/php-fpm.log
+            ls -la /tmp/
+            echo "Intentando iniciar php-fpm nuevamente con más diagnóstico..."
+            php-fpm -D -y /usr/local/etc/php-fpm.d/zz-azure.conf --fpm-config /usr/local/etc/php-fpm.conf -R
         fi
         
         echo "Iniciando Nginx..."
-        nginx -t  # Verificar la configuración antes de iniciar
+        # Verificar configuración de Nginx antes de iniciar
+        nginx -t
+        # Iniciar Nginx en primer plano
         nginx -g "daemon off;"
         EOF
         chmod +x startup.sh
