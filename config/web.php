@@ -40,8 +40,12 @@ $config = [
 
         // Añade la configuración del assetManager aquí
         'assetManager' => [
-            'basePath' => isset($GLOBALS['yii2AzureStorage']) ? $GLOBALS['yii2AzureStorage']['assetsPath'] : '@webroot/assets',
+            'basePath' => '/home/site/wwwroot/web/assets', // Ruta absoluta para Azure
             'baseUrl' => '@web/assets',
+            'hashCallback' => function ($path) {
+                return hash('md4', $path);
+            },
+            'appendTimestamp' => true,
         ],
 
         'user' => [
