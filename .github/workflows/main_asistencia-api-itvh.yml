@@ -184,13 +184,18 @@ jobs:
       uses: azure/cli@v1
       with:
         inlineScript: |
-          # Configurar Azure App Service para tiempos de espera más largos
+          # Configurar la aplicación web
           az webapp config set \
             --name ${{ env.AZURE_WEBAPP_NAME }} \
             --resource-group ${{ env.RESOURCE_GROUP }} \
             --linux-fx-version "PHP|${{ env.PHP_VERSION }}" \
-            --startup-file "/home/site/wwwroot/startup.sh" \
-            --http-logging-enabled true \
+            --startup-file "/home/site/wwwroot/startup.sh"
+            
+          # Habilitar logs y configuraciones adicionales
+          az webapp log config \
+            --name ${{ env.AZURE_WEBAPP_NAME }} \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --web-server-logging filesystem \
             --detailed-error-messages true \
             --failed-request-tracing true
 
